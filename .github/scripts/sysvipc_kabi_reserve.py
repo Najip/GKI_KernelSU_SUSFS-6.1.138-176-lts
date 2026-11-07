@@ -81,13 +81,23 @@ def main() -> None:
     if MARKER in src:
         print("  already ported - verifying only")
     else:
-        # 1. the original fields must go
+        # 1. the original fields must go. Two shapes exist by the time this runs:
+        #    the stock block, or DroidSpaces' own kABI patch, which replaces it with
+        #    packed unions (that patch strips padding but keeps the fields, so it is
+        #    superseded here).
         m = re.search(r"#ifdef CONFIG_SYSVIPC\n"
                       r"\tstruct sysv_sem\t+sysvsem;\n"
                       r"\tstruct sysv_shm\t+sysvshm;\n"
                       r"#endif\n", src)
         if not m:
-            die("sched.h: CONFIG_SYSVIPC task_struct block not found")
+            # DroidSpaces-patched shape
+            m = re.search(r"#ifdef CONFIG_SYSVIPC\n"
+                          r"(?:[^\n]*\n){0,20}?#endif\n", src)
+            if m and "sysvsem" in m.group(0) and "sysvshm" in m.group(0):
+                print("  sched.h: removing DroidSpaces' packed-union block")
+            else:
+                die("sched.h: neither the stock nor the patched CONFIG_SYSVIPC "
+                    "task_struct block was found")
         src = src[:m.start()] + "/* SYSVIPC state moved into the KABI reserves below */\n" + src[m.end():]
         print("  sched.h: removed the sysvsem/sysvshm members")
 
