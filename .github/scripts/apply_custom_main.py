@@ -4,11 +4,18 @@
 usage: apply_custom_main.py <upstream main.yml> <output yml>
 Every edit is anchored on text and idempotent; if upstream changes an
 anchor the script exits non-zero instead of writing a broken workflow.
+
+If the upstream workflow would have more than 25 workflow_dispatch inputs
+after adding the two custom pinned-commit inputs, this script removes the
+`use_ds` (DroidSpaces) and `test_release_notes` (preview release) inputs
+to stay within GitHub's 25-input limit. If the total is 25 or fewer, those
+inputs are left untouched.
 """
 import re
 import sys
 
 NAME = "Build Kernels 6.1.x Keep KMI, KernelSU, No Droidspaces"
+MAX_INPUTS = 25
 DEFAULTS = {
     "kernel_build_version": "6.1.x-android14",
     "os_patch_level": "176",
@@ -90,6 +97,25 @@ def set_default(lines, key, value):
     die(f"default of {key}")
 
 
+def count_inputs(text):
+    """Count workflow_dispatch inputs only (keys directly under inputs:)."""
+    m = re.search(r"  workflow_dispatch:\n    inputs:\n(.*?)(?=\n  [a-z]|\njobs:)", text, flags=re.S)
+    if not m:
+        return 0
+    return len(re.findall(r"^      [a-z_]+:\n", m.group(1), flags=re.M))
+
+
+def remove_input(lines, key):
+    """Remove an input block (key + its indented properties) from lines."""
+    start = next((i for i, l in enumerate(lines) if l == f"      {key}:"), None)
+    if start is None:
+        return lines
+    end = start + 1
+    while end < len(lines) and not re.match(r"^      \S", lines[end]):
+        end += 1
+    return lines[:start] + lines[end:]
+
+
 def main(src, dst):
     text = open(src, encoding="utf-8").read()
     text, n = re.subn(r"^name:.*$", f"name: {NAME}", text, count=1, flags=re.M)
@@ -103,6 +129,15 @@ def main(src, dst):
     text = insert_before(text, "      use_nomount:\n", PINNED_SUSFS_INPUT, "pinned_susfs_commit:\n        description")
     text = insert_before(text, '          emit ksu_commit "$KERNELSU_COMMIT"\n', KSU_OVERRIDE, "Manual KernelSU override")
     text = insert_before(text, "          # Tracked build helpers (resolved automatically, before the run)\n", SUSFS_OVERRIDE, "Manual SUSFS override")
+
+    # Input-count guard: if total inputs exceed GitHub's 25 limit, drop
+    # DroidSpaces (use_ds) and preview release (test_release_notes) inputs.
+    lines = text.split("\n")
+    total = count_inputs(text)
+    if total > MAX_INPUTS:
+        lines = remove_input(lines, "use_ds")
+        lines = remove_input(lines, "test_release_notes")
+        text = "\n".join(lines)
     open(dst, "w", encoding="utf-8").write(text)
 
 
