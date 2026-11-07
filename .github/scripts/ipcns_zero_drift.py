@@ -55,8 +55,6 @@ ACCESSOR = f"""\
  */
 extern struct ipc_ns_state init_ipc_ns_state;
 
-extern struct ns_common *ipc_ns_to_common(struct ipc_namespace *ns);
-
 static inline struct ipc_ns_state *ipc_ns_state(struct ipc_namespace *ns)
 {{
 	if (ns == &init_ipc_ns)
@@ -222,6 +220,12 @@ def main() -> None:
         if "struct ipc_namespace;" not in s3 and "struct ipc_namespace {" not in s3:
             s3 = s3.replace("#define to_ns_common(__ns)",
                             "struct ipc_namespace;\n\n#define to_ns_common(__ns)", 1)
+        # _Generic typechecks every branch, so the helper must be visible wherever
+        # the macro is expanded - not just in files that include ipc_namespace.h
+        if "ipc_ns_to_common(struct ipc_namespace *ns);" not in s3:
+            s3 = s3.replace("\n#define to_ns_common(__ns)",
+                            "\nstruct ns_common *ipc_ns_to_common(struct ipc_namespace *ns);\n\n"
+                            "#define to_ns_common(__ns)", 1)
         write(nc, s3)
         print("  include/linux/ns_common.h: IPC routed through ipc_ns_to_common()")
 
