@@ -92,6 +92,16 @@ runs:
         echo >> "${{ github.workspace }}/kernel/common/ipc/msgutil.c"
         echo 'EXPORT_SYMBOL_GPL(init_ipc_ns);' >> "${{ github.workspace }}/kernel/common/ipc/msgutil.c"
 
+    - name: Host the SYSVIPC task_struct state in the KABI reserves
+      # Automatic for every DS build: the config set below turns CONFIG_SYSVIPC on,
+      # and without this the two new task_struct members move 6,329 of 9,741
+      # symbols. They fit in three ANDROID_KABI_RESERVE slots, which exist in the
+      # stock build too, so the layout ends up identical either way.
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        python3 "${{ github.workspace }}/.github/scripts/sysvipc_kabi_reserve.py" "$PWD"
+
     - name: Enable Kernel Configs
       uses: ./.github/actions/set-kernel-config
       with:
@@ -100,14 +110,10 @@ runs:
         # than relying on the NET/misc actions, so a DS build is self-contained
         # even when those features are switched off for a dispatch.
         config_list: |
-          # IPC: SYSVIPC / POSIX_MQUEUE are opt-in, see use_sysvipc.
-          #
-          # They add struct sysv_sem/sysv_shm to struct task_struct and grow
-          # struct ipc_namespace. The upstream kABI patch above only strips
-          # padding - measured with cc: it takes task_struct from 32 to 24 bytes,
-          # while a config-off build has neither field at all. So the ABI still
-          # moves: 6,329 of 9,741 symbols on 6.18 (DS-only run 42330772916), and
-          # applying that patch on 6.18 left the count unchanged (42333908710).
+          # IPC - ABI-neutral because of the KABI-reserve port above, which moves
+          # both task_struct members into reserve slots the stock build also has.
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
 
           # Namespaces
           CONFIG_IPC_NS=y
