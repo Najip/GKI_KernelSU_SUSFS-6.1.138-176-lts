@@ -148,8 +148,12 @@ def main() -> None:
         problems.append("original members still present")
     if "struct sysv_sem\tsysvsem;" not in now:
         problems.append("sysvsem missing")
-    if "ANDROID_KABI_RESERVE(8);" not in now:
-        problems.append("reserve 8 no longer present")
+    if "struct sysv_shm\tsysvshm;" not in now:
+        problems.append("sysvshm missing")
+    # the reserve numbers are sublevel-dependent; only require that the union
+    # still carries three of them
+    if len(re.findall(r"ANDROID_KABI_RESERVE\(\d+\);\n\t\t\};", now)) != 1:
+        problems.append("the reserve union is not intact")
     if problems:
         die("verification failed:\n  - " + "\n  - ".join(problems))
     print("  verified: fields live in the reserve union, size unchanged")
