@@ -83,11 +83,11 @@ on:
         description: "SUSFS"
         type: boolean
         default: true
-      pinned_ksu_commit:
-        description: "Optional KernelSU commit SHA. If filled, overrides commit_mode for KernelSU only."
+      pinned_susfs_commit:
+        description: "Optional SUSFS commit SHA. Overrides the SUSFS commit for the selected Kernel Version."
         required: false
         type: string
-        default: ""        
+        default: ""
       use_nomount:
         description: "NoMount"
         type: boolean
