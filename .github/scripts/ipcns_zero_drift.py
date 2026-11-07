@@ -157,6 +157,47 @@ def main() -> None:
     if check_only:
         return
 
+    # 3b. the id-table macros spell the access the other way round, and
+    #     to_ipc_ns() hands back an empty struct.
+    for rel, macro in (("ipc/shm.c", "shm_ids"), ("ipc/sem.c", "sem_ids"),
+                       ("ipc/msg.c", "msg_ids")):
+        fp = os.path.join(root, rel)
+        if not os.path.exists(fp):
+            continue
+        s = read(fp)
+        s2, n = re.subn(r"#define %s\(ns\)\s*\(\(ns\)->ids\[" % macro,
+                        "#define %s(ns)\t(ipc_ns_state(ns)->ids[" % macro, s)
+        if n:
+            write(fp, s2)
+            print(f"  {rel}: {macro}() macro rewired")
+    ns_c2 = os.path.join(root, "ipc/namespace.c")
+    if os.path.exists(ns_c2):
+        s = read(ns_c2)
+        s2, n = re.subn(r"to_ipc_ns\(ns\)->user_ns", "ipc_ns_state(to_ipc_ns(ns))->user_ns", s)
+        if n:
+            write(ns_c2, s2)
+            print(f"  ipc/namespace.c: to_ipc_ns()->user_ns rewired")
+
+    # 4. allocation and namespace-core wiring in ipc/namespace.c. kzalloc of the
+    #    empty struct would return ZERO_SIZE_PTR, so every namespace would alias
+    #    the same address; and ns_common_init() reaches the embedded ns_common via
+    #    to_ns_common(), which has nothing to point at once the struct is empty.
+    ns_c = os.path.join(root, "ipc/namespace.c")
+    if os.path.exists(ns_c):
+        s = read(ns_c)
+        n = 0
+        if "sizeof(struct ipc_ns_state)" not in s:
+            s, k = re.subn(r"kzalloc\(sizeof\(struct ipc_namespace\)",
+                           "kzalloc(sizeof(struct ipc_ns_state)", s)
+            n += k
+        if "ns_common_init(&ipc_ns_state(ns)->ns)" not in s:
+            s, k = re.subn(r"\bns_common_init\(ns\)",
+                           "ns_common_init(&ipc_ns_state(ns)->ns)", s)
+            n += k
+        if n:
+            write(ns_c, s)
+            print(f"  ipc/namespace.c: {n} allocation/init site(s) rewired")
+
     # 4. report what is left, so the next iteration knows where to look
     leftovers = []
     for dirpath, _d, files in os.walk(os.path.join(root, "ipc")):
