@@ -127,9 +127,20 @@ def main() -> None:
         placeholder = ("struct ipc_namespace {\n};\n")
         src = src[: m.start()] + placeholder + "\n" + state + src[m.end():]
 
-        # 2. the accessor, after the placeholder
-        anchor = "struct ipc_namespace {\n};\n"
+        # 2. the accessor, after the extern it references (init_ipc_ns), which is
+        #    what the whole thing keys on
+        anchor = "extern struct ipc_namespace init_ipc_ns;\n"
+        if anchor not in src:
+            die("ipc_namespace.h: extern init_ipc_ns not found")
         src = src.replace(anchor, anchor + "\n" + ACCESSOR, 1)
+
+        # 2b. the embedded ns_common now lives in the state, so container_of has to
+        #     name the state type
+        src, k = re.subn(r"container_of\(ns, struct ipc_namespace, ns\)",
+                         "container_of(ns, struct ipc_ns_state, ns)", src)
+        if not k:
+            die("ipc_namespace.h: to_ipc_ns container_of not found")
+        print("  ipc_namespace.h: to_ipc_ns() now resolves into ipc_ns_state")
         write(hdr, src)
         print("  ipc_namespace.h: body moved to ipc_ns_state, empty placeholder kept")
 
@@ -216,7 +227,35 @@ def main() -> None:
         print(f"  NOTE: {len(leftovers)} access(es) left for manual follow-up:")
         for l in leftovers[:10]:
             print("    " + l)
-    print("[+] done (header + ipc/ rewritten; allocation/init wiring is the next stage)")
+    # 5. the static namespace: its initialiser has to fill the state, and the
+    #    object itself stays empty
+    mu = os.path.join(root, "ipc/msgutil.c")
+    if os.path.exists(mu):
+        s = read(mu)
+        m = re.search(r"struct ipc_namespace init_ipc_ns = \{\n(.*?)\n\};\n", s, re.S)
+        if m:
+            init = m.group(1).replace("&init_ipc_ns", "&init_ipc_ns_state")
+            repl = ("struct ipc_namespace init_ipc_ns;\n"
+                    "struct ipc_ns_state init_ipc_ns_state = {\n" + init + "\n};\n")
+            s = s[: m.start()] + repl + s[m.end():]
+            write(mu, s)
+            print("  ipc/msgutil.c: init_ipc_ns initialiser moved to init_ipc_ns_state")
+        else:
+            die("ipc/msgutil.c: init_ipc_ns initialiser not found")
+
+    ns_c3 = os.path.join(root, "ipc/namespace.c")
+    if os.path.exists(ns_c3):
+        s = read(ns_c3)
+        n = 0
+        s, k = re.subn(r"ns_common_free\(ns\)", "ns_common_free(&ipc_ns_state(ns)->ns)", s)
+        n += k
+        s, k = re.subn(r"\b(n|ns)->mq_mnt\b", r"ipc_ns_state(\1)->mq_mnt", s)
+        n += k
+        if n:
+            write(ns_c3, s)
+            print(f"  ipc/namespace.c: {n} teardown site(s) rewired")
+
+    print("[+] done (header + ipc/ + init/teardown rewritten)")
 
 
 if __name__ == "__main__":
