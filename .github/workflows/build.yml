@@ -457,12 +457,17 @@ jobs:
         with:
           config_list: |
             CONFIG_CGROUP_PIDS=y
-      # OFF BY DEFAULT: CONFIG_SYSVIPC adds struct sysv_sem/sysv_shm to
-      # struct task_struct and CONFIG_POSIX_MQUEUE grows struct ipc_namespace.
-      # Stock GKI has both off on every family; the upstream kABI patch only
-      # removes padding, not the fields, so enabling them still moves 6,329 of
-      # 9,741 symbols on 6.18. Opt in only for a container that needs SysV IPC.
-      - name: SysV IPC for containers (ABI drift, opt-in)
+      # SysV IPC for containers, made ABI-neutral by hosting its task_struct
+      # members in the KABI reserves (see sysvipc_kabi_reserve.py). Opt-in because
+      # it consumes three of the seven reserve slots, not because it drifts.
+      - name: Host the SYSVIPC task_struct state in the KABI reserves
+        if: contains(inputs.feature_set, 'SYSVIPC')
+        shell: bash
+        working-directory: ${{ github.workspace }}/kernel/common
+        run: |
+          python3 "${{ github.workspace }}/.github/scripts/sysvipc_kabi_reserve.py" "$PWD"
+
+      - name: SysV IPC for containers (cpu.max-style, zero ABI drift)
         if: contains(inputs.feature_set, 'SYSVIPC')
         uses: ./.github/actions/set-kernel-config
         with:
