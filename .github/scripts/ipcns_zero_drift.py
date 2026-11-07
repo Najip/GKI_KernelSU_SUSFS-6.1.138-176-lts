@@ -115,7 +115,7 @@ def main() -> None:
         # 2b. the embedded ns_common now lives in the state, so container_of has to
         #     name the state type
         src, k = re.subn(r"container_of\(ns, struct ipc_namespace, ns\)",
-                         "container_of(ns, struct ipc_ns_state, ns)", src)
+                         "(struct ipc_namespace *)container_of(ns, struct ipc_ns_state, ns)", src)
         if not k:
             die("ipc_namespace.h: to_ipc_ns container_of not found")
         print("  ipc_namespace.h: to_ipc_ns() now resolves into ipc_ns_state")
@@ -205,6 +205,30 @@ def main() -> None:
         print(f"  NOTE: {len(leftovers)} access(es) left for manual follow-up:")
         for l in leftovers[:10]:
             print("    " + l)
+    # 4b. ns_common.h resolves ns_common through _Generic(&ns->ns), which cannot work
+    #     on an empty struct - and it has to land on init_ipc_ns_state for the static
+    #     namespace, so a plain cast is no good either. Route IPC through a helper.
+    nc = os.path.join(root, "include/linux/ns_common.h")
+    if os.path.exists(nc):
+        s2 = read(nc)
+        s3, k1 = re.subn(r"struct ipc_namespace \*:          &\(__ns\)->ns,",
+                         "struct ipc_namespace *:          ipc_ns_to_common((struct ipc_namespace *)(__ns)),", s2)
+        s3, k2 = re.subn(r"const struct ipc_namespace \*:    &\(__ns\)->ns,",
+                         "const struct ipc_namespace *:    ipc_ns_to_common((struct ipc_namespace *)(__ns)),", s3)
+        if not (k1 and k2):
+            die("ns_common.h: ipc _Generic branches not found")
+        if "struct ipc_namespace;" not in s3 and "struct ipc_namespace {" not in s3:
+            s3 = s3.replace("#define to_ns_common(__ns)",
+                            "struct ipc_namespace;\n\n#define to_ns_common(__ns)", 1)
+        # _Generic typechecks every branch, so the helper must be visible wherever
+        # the macro is expanded - not just in files that include ipc_namespace.h
+        if "ipc_ns_to_common(struct ipc_namespace *ns);" not in s3:
+            s3 = s3.replace("\n#define to_ns_common(__ns)",
+                            "\nstruct ns_common *ipc_ns_to_common(struct ipc_namespace *ns);\n\n"
+                            "#define to_ns_common(__ns)", 1)
+        write(nc, s3)
+        print("  include/linux/ns_common.h: IPC routed through ipc_ns_to_common()")
+
     # 5. the static namespace: its initialiser has to fill the state, and the
     #    object itself stays empty
     mu = os.path.join(root, "ipc/msgutil.c")
@@ -228,6 +252,11 @@ def main() -> None:
         s, k = re.subn(r"ns_common_free\(ns\)", "ns_common_free(&ipc_ns_state(ns)->ns)", s)
         n += k
         s, k = re.subn(r"\b(n|ns)->mq_mnt\b", r"ipc_ns_state(\1)->mq_mnt", s)
+        n += k
+        helper = ("\nstruct ns_common *ipc_ns_to_common(struct ipc_namespace *ns)\n"
+                  "{\n\treturn &ipc_ns_state(ns)->ns;\n}\n")
+        if "ipc_ns_to_common(struct ipc_namespace *ns)\n{" not in s:
+            s = s.rstrip("\n") + "\n" + helper
         n += k
         if n:
             write(ns_c3, s)
