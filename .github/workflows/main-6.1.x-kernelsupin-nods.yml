@@ -74,10 +74,20 @@ on:
           - No Root
           - All (KernelSU-Next + KernelSU + BakaSU)
         default: KernelSU
+      pinned_ksu_commit:
+        description: "Optional KernelSU commit SHA. If filled, overrides commit_mode for KernelSU only."
+        required: false
+        type: string
+        default: ""
       use_susfs:
         description: "SUSFS"
         type: boolean
         default: true
+      pinned_susfs_commit:
+        description: "Optional SUSFS commit SHA. Overrides the SUSFS commit for the selected Kernel Version."
+        required: false
+        type: string
+        default: ""        
       use_nomount:
         description: "NoMount"
         type: boolean
@@ -343,6 +353,10 @@ jobs:
             SUKISU_ULTRA_COMMIT="$(resolve_sha https://github.com/SukiSU-Ultra/SukiSU-Ultra.git refs/heads/main)"
             FINASU_COMMIT="$(resolve_sha https://github.com/LyraVoid/FinaSU.git refs/heads/master)"
           fi
+          # Manual KernelSU override: if provided, it wins regardless of commit_mode.
+          if [ -n "${{ inputs.pinned_ksu_commit }}" ]; then
+            KERNELSU_COMMIT="${{ inputs.pinned_ksu_commit }}"
+          fi
           emit ksu_commit "$KERNELSU_COMMIT"
           emit bakasu_commit "$BAKASU_COMMIT"
           emit sukisu_ultra_commit "$SUKISU_ULTRA_COMMIT"
@@ -479,7 +493,42 @@ jobs:
             # Per-flavor SukiSU-Ultra SUSFS pin (same branch, own pin set).
             emit "${key}_sukisu_ultra" "$(pick "${PIN_SUSFS_SUKISU_ULTRA[$key]}" https://gitlab.com/simonpunk/susfs4ksu.git refs/heads/"${SUSFS_BRANCHES[$key]}")"
           done
-
+          # Manual SUSFS override for the selected kernel family.
+          PINNED_SUSFS="${{ inputs.pinned_susfs_commit }}"
+          if [ -n "$PINNED_SUSFS" ]; then
+            KVER="${{ inputs.kernel_build_version || 'All' }}"
+            if [ "$KVER" = "All" ]; then
+              echo "ERROR: pinned_susfs_commit requires selecting one Kernel Version, not All." >&2
+              exit 1
+            fi
+            case "$KVER" in
+              5.10.x-android12)
+                emit susfs_commit_android12_5_10 "$PINNED_SUSFS"
+                ;;
+              5.10.x-android13)
+                emit susfs_commit_android13_5_10 "$PINNED_SUSFS"
+                ;;
+              5.15.x-android13)
+                emit susfs_commit_android13_5_15 "$PINNED_SUSFS"
+                ;;
+              5.15.x-android14)
+                emit susfs_commit_android14_5_15 "$PINNED_SUSFS"
+                ;;
+              6.1.x-android14)
+                emit susfs_commit_android14_6_1 "$PINNED_SUSFS"
+                ;;
+              6.6.x-android15)
+                emit susfs_commit_android15_6_6 "$PINNED_SUSFS"
+                ;;
+              6.12.x-android16)
+                emit susfs_commit_android16_6_12 "$PINNED_SUSFS"
+                ;;
+              *)
+                echo "ERROR: no SUSFS override mapping for kernel version '$KVER'." >&2
+                exit 1
+                ;;
+            esac
+          fi
           # Tracked build helpers (resolved automatically, before the run)
           emit kernel_patches_commit "$(resolve_sha https://github.com/WildKernels/kernel_patches.git refs/heads/main)"
           emit anykernel3_commit   "$(resolve_sha https://github.com/WildKernels/AnyKernel3.git refs/heads/gki-2.0)"
