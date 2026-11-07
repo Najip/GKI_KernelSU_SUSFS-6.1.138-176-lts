@@ -1,0 +1,65 @@
+name: Sync custom main workflow
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: sync-custom-main-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: ${{ github.ref_name }}
+      SOURCE_FILE: .github/workflows/main.yml
+      OUT_FILE: .github/workflows/main-6.1.x-kernelsupin-nods.yml
+      BACKUP_FILE: .github/workflows/main-6.1.x-kernelsupin-nods.yml.bak
+      STATE_FILE: .github/.custom-main-sync.sha
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
+      - name: Install YAML parser
+        run: python3 -m pip install PyYAML==6.0.2
+      - name: Check source and patcher fingerprint
+        id: check
+        run: |
+          set -euo pipefail
+          sha256sum "$SOURCE_FILE" .github/scripts/apply_custom_main.py .github/scripts/safe_custom_main.py .github/scripts/normalize_removed_inputs.py .github/workflows/sync-custom-main.yml | sha256sum | cut -d ' ' -f1 > "$RUNNER_TEMP/source.sha"
+          if [ -f "$OUT_FILE" ] && [ -f "$STATE_FILE" ] && cmp -s "$STATE_FILE" "$RUNNER_TEMP/source.sha"; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Generate and validate candidate before replacing anything
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/safe_custom_main.py "$SOURCE_FILE" "$RUNNER_TEMP/candidate.yml"
+          python3 .github/scripts/normalize_removed_inputs.py "$RUNNER_TEMP/candidate.yml"
+      - name: Validate GitHub Actions schema and expressions
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
+          "$(go env GOPATH)/bin/actionlint" -shellcheck= -pyflakes= "$RUNNER_TEMP/candidate.yml"
+      - name: Replace custom workflow and commit
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          if ! cmp -s "$OUT_FILE" "$RUNNER_TEMP/candidate.yml"; then
+            if [ -f "$OUT_FILE" ]; then
+              rm -f "$BACKUP_FILE"
+              cp "$OUT_FILE" "$BACKUP_FILE"
+            fi
+            mv "$RUNNER_TEMP/candidate.yml" "$OUT_FILE"
+          fi
+          cp "$RUNNER_TEMP/source.sha" "$STATE_FILE"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$OUT_FILE" "$STATE_FILE"
+          if [ -f "$BACKUP_FILE" ]; then git add "$BACKUP_FILE"; fi
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'ci: safely regenerate custom workflow from local main.yml'
+          git push origin "HEAD:$TARGET_BRANCH"
