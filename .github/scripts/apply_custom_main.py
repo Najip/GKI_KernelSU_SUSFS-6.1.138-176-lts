@@ -6,11 +6,9 @@ Every edit is anchored on text and idempotent; if upstream changes an
 anchor the script exits non-zero instead of writing a broken workflow.
 
 If the upstream workflow would have more than 25 workflow_dispatch inputs
-after adding the two custom pinned-commit inputs, this script removes the
-`use_nomount` (NoMount) and `test_release_notes` (preview release) inputs
-to stay within GitHub's 25-input limit. If the total is 25 or fewer, those
-inputs are left untouched. DroidSpaces (`use_ds`) is preserved and remains
-unchecked by default.
+after adding the two custom pinned-commit inputs, this script removes
+optional inputs in this priority order: test_release_notes, use_nomount,
+then use_ds. Each input is preserved when it fits.
 """
 import re
 import sys
@@ -131,15 +129,14 @@ def main(src, dst):
     text = insert_before(text, '          emit ksu_commit "$KERNELSU_COMMIT"\n', KSU_OVERRIDE, "Manual KernelSU override")
     text = insert_before(text, "          # Tracked build helpers (resolved automatically, before the run)\n", SUSFS_OVERRIDE, "Manual SUSFS override")
 
-    # Input-count guard: if total inputs exceed GitHub's 25 limit, drop
-    # NoMount (use_nomount) and preview release (test_release_notes) inputs.
-    # DroidSpaces (use_ds) remains available and defaults to unchecked.
+    # Input-count guard: remove optional inputs only as needed, in this
+    # priority order: test_release_notes, use_nomount, then use_ds.
     lines = text.split("\n")
-    total = count_inputs(text)
-    if total > MAX_INPUTS:
-        lines = remove_input(lines, "use_nomount")
-        lines = remove_input(lines, "test_release_notes")
-        text = "\n".join(lines)
+    for key in ("test_release_notes", "use_nomount", "use_ds"):
+        if count_inputs("\n".join(lines)) <= MAX_INPUTS:
+            break
+        lines = remove_input(lines, key)
+    text = "\n".join(lines)
     open(dst, "w", encoding="utf-8").write(text)
 
 
