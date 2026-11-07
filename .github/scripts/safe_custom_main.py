@@ -28,14 +28,32 @@ def count_inputs(text):
 
 def remove_input(lines, key):
     text = '\n'.join(lines)
-    node = inputs_node(text)
-    pairs = node.value
+    pairs = inputs_node(text).value
     for i, (name, value) in enumerate(pairs):
         if name.value == key:
             start = name.start_mark.line
             end = pairs[i + 1][0].start_mark.line if i + 1 < len(pairs) else value.end_mark.line
             return lines[:start] + lines[end:]
     return lines
+
+
+def complete_cfs_input(text):
+    for name, value in inputs_node(text).value:
+        if name.value != 'use_cfs_bw':
+            continue
+        props = mapping(value)
+        additions = []
+        indent = ' ' * (name.start_mark.column + 2)
+        if 'type' not in props:
+            additions.append(indent + 'type: boolean')
+        if 'default' not in props:
+            additions.append(indent + 'default: false')
+        if additions:
+            lines = text.split('\n')
+            index = name.start_mark.line + 1
+            lines[index:index] = additions
+            return '\n'.join(lines)
+    return text
 
 
 def validate(text):
@@ -59,7 +77,9 @@ def main(src, dst):
     fn.__globals__['count_inputs'] = count_inputs
     fn.__globals__['remove_input'] = remove_input
     fn(src, dst)
-    validate(Path(dst).read_text())
+    text = complete_cfs_input(Path(dst).read_text())
+    validate(text)
+    Path(dst).write_text(text)
 
 
 if __name__ == '__main__':
