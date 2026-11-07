@@ -1,20 +1,20 @@
 name: Sync custom main workflow
 
-# Rebuilds main-6.1.x-kernelsupin-nods.yml from the upstream branch that
-# this fork branch was originally forked from (auto-detected at runtime),
+# Rebuilds main-6.1.x-kernelsupin-nods.yml from the current main.yml already
+# merged into this branch (the user updates main.yml after pulling upstream),
 # then re-applies the fork customisations (.github/scripts/apply_custom_main.py).
-# - Auto-detects the upstream source branch via merge-base comparison.
+# - Uses the local .github/workflows/main.yml as the source (already merged
+#   from upstream by the user).
 # - Backs up the previous custom workflow to main-6.1.x-kernelsupin-nods.yml.bak
 #   (deleting any older backup first).
-# - Renames the freshly patched upstream copy to the custom workflow name.
-# - Skips entirely if the upstream source branch's main.yml is byte-identical
-#   to the last synced copy (tracked via .github/.custom-main-sync.sha).
+# - Renames the freshly patched copy to the custom workflow name.
+# - Skips entirely if main.yml is byte-identical to the last synced copy
+#   (tracked via .github/.custom-main-sync.sha).
+# - Manual trigger only (no scheduled/cron runs).
 # Branch: main.
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "30 3 * * *"
 
 permissions:
   contents: write
@@ -24,8 +24,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  UPSTREAM_REPO: WildKernels/GKI_KernelSU_SUSFS
   TARGET_BRANCH: main
+  SOURCE_FILE: .github/workflows/main.yml
   OUT_FILE: .github/workflows/main-6.1.x-kernelsupin-nods.yml
   BACKUP_FILE: .github/workflows/main-6.1.x-kernelsupin-nods.yml.bak
   STATE_FILE: .github/.custom-main-sync.sha
@@ -37,52 +37,22 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.TARGET_BRANCH }}
-          fetch-depth: 0
           token: ${{ secrets.WORKFLOW_PAT || github.token }}
 
-      - name: Detect upstream source branch
-        id: detect
+      - name: Compute source main.yml SHA
+        id: sha
         run: |
           set -euo pipefail
-          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" || true
-          git fetch upstream --prune --tags || true
-          UPSTREAM_BRANCHES=$(git branch -r --format='%(refname:short)' | grep '^upstream/' | sed 's|^upstream/||' | grep -v HEAD)
-          echo "Upstream branches found: $UPSTREAM_BRANCHES"
-          BEST_BRANCH=""
-          BEST_DATE=0
-          for BR in $UPSTREAM_BRANCHES; do
-            MB=$(git merge-base HEAD "upstream/$BR" 2>/dev/null || true)
-            if [ -z "$MB" ]; then continue; fi
-            DATE=$(git log -1 --format=%ct "$MB" 2>/dev/null || echo 0)
-            if [ "$DATE" -gt "$BEST_DATE" ]; then
-              BEST_DATE=$DATE
-              BEST_BRANCH="$BR"
-            fi
-          done
-          if [ -z "$BEST_BRANCH" ]; then
-            echo "WARNING: could not detect source branch, falling back to main" >&2
-            BEST_BRANCH="main"
-          fi
-          echo "Detected upstream source branch: $BEST_BRANCH"
-          echo "branch=$BEST_BRANCH" >> "$GITHUB_OUTPUT"
+          sha256sum "$SOURCE_FILE" | awk '{print $1}' > "$RUNNER_TEMP/source.sha"
+          echo "Source main.yml sha: $(cat "$RUNNER_TEMP/source.sha")"
 
-      - name: Fetch upstream main.yml from detected branch
-        run: |
-          set -euo pipefail
-          BRANCH="${{ steps.detect.outputs.branch }}"
-          curl -fsSL --retry 3 \
-            "https://raw.githubusercontent.com/${UPSTREAM_REPO}/${BRANCH}/.github/workflows/main.yml" \
-            -o "$RUNNER_TEMP/upstream-main.yml"
-          sha256sum "$RUNNER_TEMP/upstream-main.yml" | awk '{print $1}' > "$RUNNER_TEMP/upstream.sha"
-          echo "Fetched main.yml from upstream branch: $BRANCH"
-
-      - name: Skip if upstream main.yml unchanged
+      - name: Skip if main.yml unchanged
         id: skip
         run: |
           set -euo pipefail
-          UPSTREAM_SHA="$(cat "$RUNNER_TEMP/upstream.sha")"
-          if [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" = "$UPSTREAM_SHA" ]; then
-            echo "Upstream main.yml unchanged (sha $UPSTREAM_SHA). Skipping."
+          SRC_SHA="$(cat "$RUNNER_TEMP/source.sha")"
+          if [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" = "$SRC_SHA" ]; then
+            echo "main.yml unchanged (sha $SRC_SHA). Skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -96,7 +66,7 @@ jobs:
             rm -f "$BACKUP_FILE"
             cp "$OUT_FILE" "$BACKUP_FILE"
           fi
-          python3 .github/scripts/apply_custom_main.py "$RUNNER_TEMP/upstream-main.yml" "$OUT_FILE"
+          python3 .github/scripts/apply_custom_main.py "$SOURCE_FILE" "$OUT_FILE"
 
       - name: Validate YAML
         if: steps.skip.outputs.skip == 'false'
@@ -110,12 +80,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$OUT_FILE" "$BACKUP_FILE" 2>/dev/null || git add "$OUT_FILE"
           if ! git diff --cached --quiet; then
-            git commit -m "ci: resync main-6.1.x-kernelsupin-nods.yml from upstream ${{ steps.detect.outputs.branch }} (backup old custom)"
+            git commit -m "ci: resync main-6.1.x-kernelsupin-nods.yml from local main.yml (backup old custom)"
           fi
           mkdir -p "$(dirname "$STATE_FILE")"
-          cp "$RUNNER_TEMP/upstream.sha" "$STATE_FILE"
+          cp "$RUNNER_TEMP/source.sha" "$STATE_FILE"
           git add "$STATE_FILE"
           if ! git diff --cached --quiet; then
-            git commit -m "ci: update upstream main.yml sync state"
+            git commit -m "ci: update main.yml sync state"
           fi
           git push origin "HEAD:${TARGET_BRANCH}"
