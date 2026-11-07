@@ -1,0 +1,60 @@
+name: Sync custom main workflow
+
+# Rebuilds main-6.1.x-kernelsupin-nods.yml from upstream's main.yml and
+# re-applies the fork customisations (.github/scripts/apply_custom_main.py).
+# Commits only when the result differs. Branch: feat/usb-arsenal.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 3 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-custom-main
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: WildKernels/GKI_KernelSU_SUSFS
+  UPSTREAM_REF: main
+  TARGET_BRANCH: feat/usb-arsenal
+  OUT_FILE: .github/workflows/main-6.1.x-kernelsupin-nods.yml
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          # Pushing files under .github/workflows needs a PAT with the
+          # "workflow" scope; GITHUB_TOKEN is rejected for those paths.
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
+
+      - name: Fetch upstream main.yml
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 \
+            "https://raw.githubusercontent.com/${UPSTREAM_REPO}/${UPSTREAM_REF}/.github/workflows/main.yml" \
+            -o "$RUNNER_TEMP/upstream-main.yml"
+
+      - name: Apply fork customisations
+        run: python3 .github/scripts/apply_custom_main.py "$RUNNER_TEMP/upstream-main.yml" "$OUT_FILE"
+
+      - name: Validate YAML
+        run: python3 -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" "$OUT_FILE"
+
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- "$OUT_FILE"; then
+            echo "Already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$OUT_FILE"
+          git commit -m "ci: resync ${OUT_FILE##*/} from upstream main.yml"
+          git push origin "HEAD:${TARGET_BRANCH}"
