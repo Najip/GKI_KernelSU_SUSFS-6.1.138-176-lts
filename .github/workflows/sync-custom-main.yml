@@ -26,7 +26,7 @@ jobs:
         id: check
         run: |
           set -euo pipefail
-          sha256sum "$SOURCE_FILE" .github/scripts/apply_custom_main.py .github/scripts/safe_custom_main.py | sha256sum | cut -d ' ' -f1 > "$RUNNER_TEMP/source.sha"
+          sha256sum "$SOURCE_FILE" .github/scripts/apply_custom_main.py .github/scripts/safe_custom_main.py .github/scripts/normalize_removed_inputs.py .github/workflows/sync-custom-main.yml | sha256sum | cut -d ' ' -f1 > "$RUNNER_TEMP/source.sha"
           if [ -f "$STATE_FILE" ] && cmp -s "$STATE_FILE" "$RUNNER_TEMP/source.sha"; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
           else
@@ -37,11 +37,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/scripts/safe_custom_main.py "$SOURCE_FILE" "$RUNNER_TEMP/candidate.yml"
+          python3 .github/scripts/normalize_removed_inputs.py "$RUNNER_TEMP/candidate.yml"
       - name: Validate GitHub Actions schema and expressions
         if: steps.check.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
           "$(go env GOPATH)/bin/actionlint" -shellcheck= -pyflakes= "$RUNNER_TEMP/candidate.yml"
       - name: Replace custom workflow and commit
         if: steps.check.outputs.changed == 'true'
