@@ -11,7 +11,7 @@ root = yaml.compose(text)
 def mapping(node):
     return {key.value: value for key, value in node.value}
 inputs = mapping(mapping(mapping(mapping(root)['on'])['workflow_dispatch'])['inputs'])
-for key in ('use_ds', 'test_release_notes'):
+for key in ('use_nomount', 'test_release_notes'):
     if key not in inputs:
         text = re.sub(r'\binputs\.' + re.escape(key) + r'\b', 'false', text)
 path.write_text(text)
