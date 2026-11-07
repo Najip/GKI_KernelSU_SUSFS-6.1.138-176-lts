@@ -7,9 +7,10 @@ anchor the script exits non-zero instead of writing a broken workflow.
 
 If the upstream workflow would have more than 25 workflow_dispatch inputs
 after adding the two custom pinned-commit inputs, this script removes the
-`use_ds` (DroidSpaces) and `test_release_notes` (preview release) inputs
+`use_nomount` (NoMount) and `test_release_notes` (preview release) inputs
 to stay within GitHub's 25-input limit. If the total is 25 or fewer, those
-inputs are left untouched.
+inputs are left untouched. DroidSpaces (`use_ds`) is preserved and remains
+unchecked by default.
 """
 import re
 import sys
@@ -131,11 +132,12 @@ def main(src, dst):
     text = insert_before(text, "          # Tracked build helpers (resolved automatically, before the run)\n", SUSFS_OVERRIDE, "Manual SUSFS override")
 
     # Input-count guard: if total inputs exceed GitHub's 25 limit, drop
-    # DroidSpaces (use_ds) and preview release (test_release_notes) inputs.
+    # NoMount (use_nomount) and preview release (test_release_notes) inputs.
+    # DroidSpaces (use_ds) remains available and defaults to unchecked.
     lines = text.split("\n")
     total = count_inputs(text)
     if total > MAX_INPUTS:
-        lines = remove_input(lines, "use_ds")
+        lines = remove_input(lines, "use_nomount")
         lines = remove_input(lines, "test_release_notes")
         text = "\n".join(lines)
     open(dst, "w", encoding="utf-8").write(text)
