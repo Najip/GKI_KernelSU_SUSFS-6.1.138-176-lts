@@ -81,27 +81,61 @@ def main() -> None:
     if MARKER in src:
         print("  already ported - verifying only")
     else:
-        # 1. the original fields must go
+        # 1. the original fields must go. Two shapes exist by the time this runs:
+        #    the stock block, or DroidSpaces' own kABI patch, which replaces it with
+        #    packed unions (that patch strips padding but keeps the fields, so it is
+        #    superseded here).
         m = re.search(r"#ifdef CONFIG_SYSVIPC\n"
                       r"\tstruct sysv_sem\t+sysvsem;\n"
                       r"\tstruct sysv_shm\t+sysvshm;\n"
                       r"#endif\n", src)
         if not m:
-            die("sched.h: CONFIG_SYSVIPC task_struct block not found")
+            # DroidSpaces-patched shape
+            m = re.search(r"#ifdef CONFIG_SYSVIPC\n"
+                          r"(?:[^\n]*\n){0,20}?#endif\n", src)
+            if m and "sysvsem" in m.group(0) and "sysvshm" in m.group(0):
+                print("  sched.h: removing DroidSpaces' packed-union block")
+            else:
+                die("sched.h: neither the stock nor the patched CONFIG_SYSVIPC "
+                    "task_struct block was found")
         src = src[:m.start()] + "/* SYSVIPC state moved into the KABI reserves below */\n" + src[m.end():]
         print("  sched.h: removed the sysvsem/sysvshm members")
 
-        # 2. host them in reserves 6..8, inside struct task_struct
+        # 2. host them in three consecutive reserve slots. Which numbers exist
+        #    depends on the sublevel (6.18.38 differs from 6.18.32), so find
+        #    struct task_struct by brace matching and take the highest run of three.
         start = src.index("struct task_struct {")
-        end = src.index("\n};", start)
-        body = src[start:end]
-        block = ("\tANDROID_KABI_RESERVE(6);\n"
-                 "\tANDROID_KABI_RESERVE(7);\n"
-                 "\tANDROID_KABI_RESERVE(8);\n")
-        if block not in body:
-            die("sched.h: reserves 6/7/8 not found together in struct task_struct")
-        body = body.replace(block, UNION, 1)
-        src = src[:start] + body + src[end:]
+        depth, i = 0, src.index("{", start)
+        while i < len(src):
+            if src[i] == "{":
+                depth += 1
+            elif src[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        body = src[start:i]
+        nums = [int(n) for n in re.findall(r"ANDROID_KABI_RESERVE\((\d+)\);", body)]
+        if not nums:
+            die("sched.h: task_struct has no ANDROID_KABI_RESERVE slots")
+        runs = []
+        for n in nums:
+            if n + 1 in nums and n + 2 in nums:
+                runs.append(n)
+        if not runs:
+            die(f"sched.h: no three consecutive reserves in task_struct (have {nums})")
+        pick = max(runs)
+        print(f"  sched.h: reserves present {nums}, using {pick}/{pick+1}/{pick+2}")
+        block = re.compile(r"[ \t]*ANDROID_KABI_RESERVE\(%d\);[ \t]*\n"
+                           r"[ \t]*ANDROID_KABI_RESERVE\(%d\);[ \t]*\n"
+                           r"[ \t]*ANDROID_KABI_RESERVE\(%d\);[ \t]*\n" % (pick, pick+1, pick+2))
+        if len(block.findall(body)) != 1:
+            die("sched.h: the chosen reserve run is not unique inside task_struct")
+        union = UNION.replace("ANDROID_KABI_RESERVE(6)", f"ANDROID_KABI_RESERVE({pick})") \
+                     .replace("ANDROID_KABI_RESERVE(7)", f"ANDROID_KABI_RESERVE({pick+1})") \
+                     .replace("ANDROID_KABI_RESERVE(8)", f"ANDROID_KABI_RESERVE({pick+2})")
+        body = block.sub(union, body, count=1)
+        src = src[:start] + body + src[i:]
         write(sched, src)
         print("  sched.h: sysv fields hosted in ANDROID_KABI_RESERVE(6..8)")
 
@@ -112,13 +146,14 @@ def main() -> None:
         problems.append("union/marker missing")
     if re.search(r"#ifdef CONFIG_SYSVIPC\n\tstruct sysv_sem", now):
         problems.append("original members still present")
-    start = now.index("struct task_struct {")
-    end = now.index("\n};", start)
-    body = now[start:end]
-    if "struct sysv_sem\tsysvsem;" not in body:
-        problems.append("sysvsem not inside task_struct")
-    if "ANDROID_KABI_RESERVE(8);" not in body:
-        problems.append("reserve 8 no longer present")
+    if "struct sysv_sem\tsysvsem;" not in now:
+        problems.append("sysvsem missing")
+    if "struct sysv_shm\tsysvshm;" not in now:
+        problems.append("sysvshm missing")
+    # the reserve numbers are sublevel-dependent; only require that the union
+    # still carries three of them
+    if len(re.findall(r"ANDROID_KABI_RESERVE\(\d+\);\n\t\t\};", now)) != 1:
+        problems.append("the reserve union is not intact")
     if problems:
         die("verification failed:\n  - " + "\n  - ".join(problems))
     print("  verified: fields live in the reserve union, size unchanged")

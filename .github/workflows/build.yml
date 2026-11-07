@@ -457,24 +457,6 @@ jobs:
         with:
           config_list: |
             CONFIG_CGROUP_PIDS=y
-      # SysV IPC for containers, made ABI-neutral by hosting its task_struct
-      # members in the KABI reserves (see sysvipc_kabi_reserve.py). Opt-in because
-      # it consumes three of the seven reserve slots, not because it drifts.
-      - name: Host the SYSVIPC task_struct state in the KABI reserves
-        if: contains(inputs.feature_set, 'SYSVIPC')
-        shell: bash
-        working-directory: ${{ github.workspace }}/kernel/common
-        run: |
-          python3 "${{ github.workspace }}/.github/scripts/sysvipc_kabi_reserve.py" "$PWD"
-
-      - name: SysV IPC for containers (cpu.max-style, zero ABI drift)
-        if: contains(inputs.feature_set, 'SYSVIPC')
-        uses: ./.github/actions/set-kernel-config
-        with:
-          config_list: |
-            CONFIG_SYSVIPC=y
-            CONFIG_POSIX_MQUEUE=y
-
       - name: Apply NTSync Patches
         if: contains(inputs.feature_set, 'NTSync')
         uses: ./.github/actions/ntsync
