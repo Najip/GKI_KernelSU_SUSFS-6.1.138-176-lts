@@ -113,7 +113,7 @@ runs:
           # IPC - ABI-neutral because of the KABI-reserve port above, which moves
           # both task_struct members into reserve slots the stock build also has.
           CONFIG_SYSVIPC=y
-          CONFIG_POSIX_MQUEUE=y
+          # probe: POSIX_MQUEUE left off to isolate the carrier
 
           # Namespaces
           CONFIG_IPC_NS=y
