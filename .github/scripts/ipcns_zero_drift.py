@@ -53,28 +53,6 @@ ACCESSOR = f"""\
  * init_ipc_ns is a static object rather than an allocation, so it keeps its own
  * state block and is special-cased.
  */
-struct ipc_ns_state {{
-	struct ns_common ns;
-	struct ipc_ids ids[3];
-	int sem_ctls[4];
-	int used_sems;
-	unsigned int msg_ctlmax, msg_ctlmnb, msg_ctlmni;
-	struct percpu_counter percpu_msg_bytes, percpu_msg_hdrs;
-	size_t shm_ctlmax, shm_ctlall;
-	unsigned long shm_tot;
-	int shm_ctlmni;
-	int shm_rmid_forced;
-	struct notifier_block ipcns_nb;
-	struct vfsmount *mq_mnt;
-	unsigned int mq_queues_count, mq_queues_max, mq_msg_max;
-	unsigned int mq_msgsize_max, mq_msg_default, mq_msgsize_default;
-	struct ctl_table_set mq_set;
-	struct ctl_table_header *mq_sysctls;
-#ifdef CONFIG_USER_NS
-	struct user_namespace *user_ns;
-#endif
-}};
-
 extern struct ipc_ns_state init_ipc_ns_state;
 
 static inline struct ipc_ns_state *ipc_ns_state(struct ipc_namespace *ns)
