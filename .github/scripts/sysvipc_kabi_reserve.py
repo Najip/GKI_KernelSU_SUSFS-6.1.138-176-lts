@@ -101,17 +101,41 @@ def main() -> None:
         src = src[:m.start()] + "/* SYSVIPC state moved into the KABI reserves below */\n" + src[m.end():]
         print("  sched.h: removed the sysvsem/sysvshm members")
 
-        # 2. host them in reserves 6..8. Search the whole file: cutting the struct
-        #    body at the first "\n};" is not safe - task_struct holds nested
-        #    anonymous unions, and the DroidSpaces patch adds more. The 6/7/8
-        #    sequence is unique to task_struct.
-        block = re.compile(r"[ \t]*ANDROID_KABI_RESERVE\(6\);[ \t]*\n"
-                           r"[ \t]*ANDROID_KABI_RESERVE\(7\);[ \t]*\n"
-                           r"[ \t]*ANDROID_KABI_RESERVE\(8\);[ \t]*\n")
-        hits = block.findall(src)
-        if len(hits) != 1:
-            die(f"sched.h: expected exactly one ANDROID_KABI_RESERVE(6/7/8) block, found {len(hits)}")
-        src = block.sub(UNION, src, count=1)
+        # 2. host them in three consecutive reserve slots. Which numbers exist
+        #    depends on the sublevel (6.18.38 differs from 6.18.32), so find
+        #    struct task_struct by brace matching and take the highest run of three.
+        start = src.index("struct task_struct {")
+        depth, i = 0, src.index("{", start)
+        while i < len(src):
+            if src[i] == "{":
+                depth += 1
+            elif src[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        body = src[start:i]
+        nums = [int(n) for n in re.findall(r"ANDROID_KABI_RESERVE\((\d+)\);", body)]
+        if not nums:
+            die("sched.h: task_struct has no ANDROID_KABI_RESERVE slots")
+        runs = []
+        for n in nums:
+            if n + 1 in nums and n + 2 in nums:
+                runs.append(n)
+        if not runs:
+            die(f"sched.h: no three consecutive reserves in task_struct (have {nums})")
+        pick = max(runs)
+        print(f"  sched.h: reserves present {nums}, using {pick}/{pick+1}/{pick+2}")
+        block = re.compile(r"[ \t]*ANDROID_KABI_RESERVE\(%d\);[ \t]*\n"
+                           r"[ \t]*ANDROID_KABI_RESERVE\(%d\);[ \t]*\n"
+                           r"[ \t]*ANDROID_KABI_RESERVE\(%d\);[ \t]*\n" % (pick, pick+1, pick+2))
+        if len(block.findall(body)) != 1:
+            die("sched.h: the chosen reserve run is not unique inside task_struct")
+        union = UNION.replace("ANDROID_KABI_RESERVE(6)", f"ANDROID_KABI_RESERVE({pick})") \
+                     .replace("ANDROID_KABI_RESERVE(7)", f"ANDROID_KABI_RESERVE({pick+1})") \
+                     .replace("ANDROID_KABI_RESERVE(8)", f"ANDROID_KABI_RESERVE({pick+2})")
+        body = block.sub(union, body, count=1)
+        src = src[:start] + body + src[i:]
         write(sched, src)
         print("  sched.h: sysv fields hosted in ANDROID_KABI_RESERVE(6..8)")
 
