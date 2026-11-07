@@ -100,6 +100,10 @@ on:
         description: "Networking"
         type: boolean
         default: true
+      use_ds:
+        description: "DroidSpaces"
+        type: boolean
+        default: false
       use_usba:
         description: "USB Arsenal (USB gadget patches + configs)"
         type: boolean
@@ -588,7 +592,7 @@ jobs:
           else
             F_SUSFS="${{ inputs.use_susfs }}";   F_NOMOUNT="${{ inputs.use_nomount }}"
             F_BBG="${{ inputs.use_bbg }}";        F_NET="${{ inputs.use_net }}"
-            F_DS="${{ false }}";          F_USBA="${{ inputs.use_usba }}"
+            F_DS="${{ inputs.use_ds }}";          F_USBA="${{ inputs.use_usba }}"
             F_NTSYNC="${{ inputs.use_ntsync }}"
             F_PTRACE="${{ inputs.use_ptrace }}";  F_UNICODE="${{ inputs.use_unicode }}"
             F_BPF="${{ inputs.use_bpf }}";        F_PERF="${{ inputs.use_perf }}"
@@ -1902,7 +1906,7 @@ jobs:
           USE_SUSFS: ${{ inputs.use_susfs || (github.event_name == 'schedule' && true) || false }}
           USE_NOMOUNT: ${{ inputs.use_nomount || (github.event_name == 'schedule' && true) || false }}
           USE_BBG: ${{ inputs.use_bbg || (github.event_name == 'schedule' && true) || false }}
-          USE_DS: ${{ false || (github.event_name == 'schedule' && true) || false }}
+          USE_DS: ${{ inputs.use_ds || (github.event_name == 'schedule' && true) || false }}
           USE_NET: ${{ inputs.use_net || (github.event_name == 'schedule' && true) || false }}
           USE_NTSYNC: ${{ inputs.use_ntsync || (github.event_name == 'schedule' && true) || false }}
           USE_PTRACE: ${{ inputs.use_ptrace || (github.event_name == 'schedule' && true) || false }}
