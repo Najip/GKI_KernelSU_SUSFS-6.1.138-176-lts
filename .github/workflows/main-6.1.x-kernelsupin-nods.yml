@@ -87,7 +87,7 @@ on:
         description: "Optional SUSFS commit SHA. Overrides the SUSFS commit for the selected Kernel Version."
         required: false
         type: string
-        default: ""        
+        default: ""
       use_nomount:
         description: "NoMount"
         type: boolean
@@ -493,6 +493,7 @@ jobs:
             # Per-flavor SukiSU-Ultra SUSFS pin (same branch, own pin set).
             emit "${key}_sukisu_ultra" "$(pick "${PIN_SUSFS_SUKISU_ULTRA[$key]}" https://gitlab.com/simonpunk/susfs4ksu.git refs/heads/"${SUSFS_BRANCHES[$key]}")"
           done
+
           # Manual SUSFS override for the selected kernel family.
           PINNED_SUSFS="${{ inputs.pinned_susfs_commit }}"
           if [ -n "$PINNED_SUSFS" ]; then
