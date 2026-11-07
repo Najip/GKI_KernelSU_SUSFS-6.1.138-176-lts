@@ -101,17 +101,17 @@ def main() -> None:
         src = src[:m.start()] + "/* SYSVIPC state moved into the KABI reserves below */\n" + src[m.end():]
         print("  sched.h: removed the sysvsem/sysvshm members")
 
-        # 2. host them in reserves 6..8, inside struct task_struct
-        start = src.index("struct task_struct {")
-        end = src.index("\n};", start)
-        body = src[start:end]
-        block = ("\tANDROID_KABI_RESERVE(6);\n"
-                 "\tANDROID_KABI_RESERVE(7);\n"
-                 "\tANDROID_KABI_RESERVE(8);\n")
-        if block not in body:
-            die("sched.h: reserves 6/7/8 not found together in struct task_struct")
-        body = body.replace(block, UNION, 1)
-        src = src[:start] + body + src[end:]
+        # 2. host them in reserves 6..8. Search the whole file: cutting the struct
+        #    body at the first "\n};" is not safe - task_struct holds nested
+        #    anonymous unions, and the DroidSpaces patch adds more. The 6/7/8
+        #    sequence is unique to task_struct.
+        block = re.compile(r"[ \t]*ANDROID_KABI_RESERVE\(6\);[ \t]*\n"
+                           r"[ \t]*ANDROID_KABI_RESERVE\(7\);[ \t]*\n"
+                           r"[ \t]*ANDROID_KABI_RESERVE\(8\);[ \t]*\n")
+        hits = block.findall(src)
+        if len(hits) != 1:
+            die(f"sched.h: expected exactly one ANDROID_KABI_RESERVE(6/7/8) block, found {len(hits)}")
+        src = block.sub(UNION, src, count=1)
         write(sched, src)
         print("  sched.h: sysv fields hosted in ANDROID_KABI_RESERVE(6..8)")
 
@@ -122,12 +122,9 @@ def main() -> None:
         problems.append("union/marker missing")
     if re.search(r"#ifdef CONFIG_SYSVIPC\n\tstruct sysv_sem", now):
         problems.append("original members still present")
-    start = now.index("struct task_struct {")
-    end = now.index("\n};", start)
-    body = now[start:end]
-    if "struct sysv_sem\tsysvsem;" not in body:
-        problems.append("sysvsem not inside task_struct")
-    if "ANDROID_KABI_RESERVE(8);" not in body:
+    if "struct sysv_sem\tsysvsem;" not in now:
+        problems.append("sysvsem missing")
+    if "ANDROID_KABI_RESERVE(8);" not in now:
         problems.append("reserve 8 no longer present")
     if problems:
         die("verification failed:\n  - " + "\n  - ".join(problems))
