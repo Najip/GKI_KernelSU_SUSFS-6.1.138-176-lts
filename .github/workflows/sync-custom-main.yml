@@ -1,91 +1,64 @@
 name: Sync custom main workflow
-
-# Rebuilds main-6.1.x-kernelsupin-nods.yml from the current main.yml already
-# merged into this branch (the user updates main.yml after pulling upstream),
-# then re-applies the fork customisations (.github/scripts/apply_custom_main.py).
-# - Uses the local .github/workflows/main.yml as the source (already merged
-#   from upstream by the user).
-# - Backs up the previous custom workflow to main-6.1.x-kernelsupin-nods.yml.bak
-#   (deleting any older backup first).
-# - Renames the freshly patched copy to the custom workflow name.
-# - Skips entirely if main.yml is byte-identical to the last synced copy
-#   (tracked via .github/.custom-main-sync.sha).
-# - Manual trigger only (no scheduled/cron runs).
-# Branch: main.
-
 on:
   workflow_dispatch:
-
 permissions:
   contents: write
-
 concurrency:
-  group: sync-custom-main
+  group: sync-custom-main-${{ github.ref_name }}
   cancel-in-progress: false
-
-env:
-  TARGET_BRANCH: main
-  SOURCE_FILE: .github/workflows/main.yml
-  OUT_FILE: .github/workflows/main-6.1.x-kernelsupin-nods.yml
-  BACKUP_FILE: .github/workflows/main-6.1.x-kernelsupin-nods.yml.bak
-  STATE_FILE: .github/.custom-main-sync.sha
-
 jobs:
   sync:
     runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: ${{ github.ref_name }}
+      SOURCE_FILE: .github/workflows/main.yml
+      OUT_FILE: .github/workflows/main-6.1.x-kernelsupin-nods.yml
+      BACKUP_FILE: .github/workflows/main-6.1.x-kernelsupin-nods.yml.bak
+      STATE_FILE: .github/.custom-main-sync.sha
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TARGET_BRANCH }}
+          ref: ${{ github.ref_name }}
           token: ${{ secrets.WORKFLOW_PAT || github.token }}
-
-      - name: Compute source main.yml SHA
-        id: sha
+      - name: Install YAML parser
+        run: python3 -m pip install PyYAML==6.0.2
+      - name: Check source and patcher fingerprint
+        id: check
         run: |
           set -euo pipefail
-          sha256sum "$SOURCE_FILE" | awk '{print $1}' > "$RUNNER_TEMP/source.sha"
-          echo "Source main.yml sha: $(cat "$RUNNER_TEMP/source.sha")"
-
-      - name: Skip if main.yml unchanged
-        id: skip
-        run: |
-          set -euo pipefail
-          SRC_SHA="$(cat "$RUNNER_TEMP/source.sha")"
-          if [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" = "$SRC_SHA" ]; then
-            echo "main.yml unchanged (sha $SRC_SHA). Skipping."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+          sha256sum "$SOURCE_FILE" .github/scripts/apply_custom_main.py .github/scripts/safe_custom_main.py | sha256sum | cut -d ' ' -f1 > "$RUNNER_TEMP/source.sha"
+          if [ -f "$STATE_FILE" ] && cmp -s "$STATE_FILE" "$RUNNER_TEMP/source.sha"; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
           else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Backup old custom workflow and apply patch
-        if: steps.skip.outputs.skip == 'false'
+      - name: Generate and validate candidate before replacing anything
+        if: steps.check.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          if [ -f "$OUT_FILE" ]; then
-            rm -f "$BACKUP_FILE"
-            cp "$OUT_FILE" "$BACKUP_FILE"
-          fi
-          python3 .github/scripts/apply_custom_main.py "$SOURCE_FILE" "$OUT_FILE"
-
-      - name: Validate YAML
-        if: steps.skip.outputs.skip == 'false'
-        run: python3 -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" "$OUT_FILE"
-
-      - name: Commit if changed
-        if: steps.skip.outputs.skip == 'false'
+          python3 .github/scripts/safe_custom_main.py "$SOURCE_FILE" "$RUNNER_TEMP/candidate.yml"
+      - name: Validate GitHub Actions schema and expressions
+        if: steps.check.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$OUT_FILE" "$BACKUP_FILE" 2>/dev/null || git add "$OUT_FILE"
-          if ! git diff --cached --quiet; then
-            git commit -m "ci: resync main-6.1.x-kernelsupin-nods.yml from local main.yml (backup old custom)"
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$(go env GOPATH)/bin/actionlint" -shellcheck= -pyflakes= "$RUNNER_TEMP/candidate.yml"
+      - name: Replace custom workflow and commit
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          if ! cmp -s "$OUT_FILE" "$RUNNER_TEMP/candidate.yml"; then
+            if [ -f "$OUT_FILE" ]; then
+              rm -f "$BACKUP_FILE"
+              cp "$OUT_FILE" "$BACKUP_FILE"
+            fi
+            mv "$RUNNER_TEMP/candidate.yml" "$OUT_FILE"
           fi
-          mkdir -p "$(dirname "$STATE_FILE")"
           cp "$RUNNER_TEMP/source.sha" "$STATE_FILE"
-          git add "$STATE_FILE"
-          if ! git diff --cached --quiet; then
-            git commit -m "ci: update main.yml sync state"
-          fi
-          git push origin "HEAD:${TARGET_BRANCH}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$OUT_FILE" "$STATE_FILE"
+          if [ -f "$BACKUP_FILE" ]; then git add "$BACKUP_FILE"; fi
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'ci: safely regenerate custom workflow from local main.yml'
+          git push origin "HEAD:$TARGET_BRANCH"
