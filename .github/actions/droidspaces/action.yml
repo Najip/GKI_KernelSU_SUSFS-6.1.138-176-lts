@@ -84,6 +84,16 @@ runs:
       run: |
         python3 "${{ github.workspace }}/.github/scripts/binder_ipc_ns_exports.py" "$PWD"
 
+    - name: Enable IPC configs
+      if: inputs.version != 'android17-6.18'
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_IPC_NS=y
+          CONFIG_PID_NS=y
+
     - name: Enable Kernel Configs
       uses: ./.github/actions/set-kernel-config
       with:
@@ -92,13 +102,6 @@ runs:
         # than relying on the NET/misc actions, so a DS build is self-contained
         # even when those features are switched off for a dispatch.
         config_list: |
-          # IPC
-          CONFIG_SYSVIPC=y
-          CONFIG_POSIX_MQUEUE=y
-
-          # Namespaces
-          CONFIG_IPC_NS=y
-          CONFIG_PID_NS=y
           # optional but recommended: docker's unsafe procfs check
           CONFIG_USER_NS=y
 
