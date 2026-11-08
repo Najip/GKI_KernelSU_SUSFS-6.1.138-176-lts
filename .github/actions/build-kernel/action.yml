@@ -19,7 +19,7 @@ runs:
   steps:
     - name: Setup Kernel Configs
       if: false
-      uses: ./.github/actions/set-kernel-config
+      uses: ./.github/actions/add-configs
 
     # - name: Provide host ld from repo prebuilts
     #   shell: bash
@@ -55,7 +55,6 @@ runs:
       working-directory: ${{ github.workspace }}/kernel
       run: |
         PAGE_SIZE="${{ inputs.page_size }}"
-        sed -i 's/check_defconfig//' ./common/build.config.gki
         if [ -f "build/build.sh" ]; then
           if [ "$PAGE_SIZE" != "4k" ]; then
             echo "ERROR: page_size=${PAGE_SIZE} is only supported by the Kleaf (Bazel) build; this tree uses build/build.sh." >&2
@@ -67,6 +66,13 @@ runs:
           # a handful of actions for a multi-GB restore/save. A build that can be
           # reproduced only when a cache happens to be warm is worse than a slow
           # build, so the tree now compiles with plain clang every time.
+          # build.sh has no fragment mechanism, but it does source
+          # BUILD_CONFIG_FRAGMENTS after the build config (_setup_env.sh:56-58).
+          # Layering one there sets POST_DEFCONFIG_CMDS without editing upstream files.
+          if [ -s common/wild.fragment ]; then
+            cp "${{ github.workspace }}/.github/actions/build-kernel/legacy-wild.config" wild_build.config
+            export BUILD_CONFIG_FRAGMENTS="wild_build.config"
+          fi
           BUILD_GKI_ARTIFACTS="" \
           BUILD_GKI_CERTIFICATION_TOOLS=0 \
           BUILD_SYSTEM_DLKM=0 \
@@ -78,7 +84,10 @@ runs:
           BUILD_CONFIG=common/build.config.gki.aarch64 \
           build/build.sh -j"$(nproc)"
         else
-          sed -i '/name = "kernel_aarch64",/a\    check_defconfig = "disabled",' common/BUILD.bazel
+          # check_defconfig is left at its default (match/minimized): the fragment is a
+          # post-defconfig fragment, so it does not change the defconfig the check compares
+          # against. Verified by building //common:kernel_aarch64_config with the fragment
+          # on a pristine tree.
           PAGE_SIZE_FLAGS=()
           if [ "$PAGE_SIZE" = "16k" ]; then
             PAGE_SIZE_FLAGS+=(--page_size=16k)
@@ -95,10 +104,25 @@ runs:
           else
             BAZEL_TARGET=//common:kernel_aarch64/Image
           fi
+          # Several steps append to common/wild.fragment, so the same symbol can
+          # appear more than once. Collapse it to one entry per symbol (last wins)
+          # and report where two steps disagreed, instead of letting step order
+          # silently decide inside merge_config/olddefconfig.
+          if [ -s common/wild.fragment ]; then
+            python3 "${{ github.workspace }}/.github/scripts/dedupe_fragment.py" common/wild.fragment
+          fi
+          # DroidSpaces stages this file; passing it as a normal defconfig fragment
+          # lets the build apply it after `make defconfig` (see kleaf's post defconfig
+          # fragment order), so no BUILD.bazel edit is needed.
+          FRAGMENT_FLAG=""
+          if [ -s common/wild.fragment ]; then
+            FRAGMENT_FLAG="--defconfig_fragment=//common:wild.fragment"
+          fi
           tools/bazel build \
             --config=fast \
             "${PAGE_SIZE_FLAGS[@]}" \
             --disk_cache=/home/runner/.cache/bazel \
+            ${FRAGMENT_FLAG} \
             "$BAZEL_TARGET"
         fi
 
