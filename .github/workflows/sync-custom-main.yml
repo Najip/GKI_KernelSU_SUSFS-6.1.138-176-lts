@@ -1,0 +1,39 @@
+name: Sync Custom Main Workflow
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: custom-main-sync-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          go version
+          GOPROXY=https://proxy.golang.org go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
+          sudo install -m 0755 "$(go env GOPATH)/bin/actionlint" /usr/local/bin/actionlint
+          actionlint -version
+      - name: Regenerate and validate temporary candidate
+        run: python3 .github/scripts/safe_custom_main.py
+      - name: Commit generated changes only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: sync custom main workflow"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
