@@ -84,60 +84,68 @@ runs:
       run: |
         python3 "${{ github.workspace }}/.github/scripts/binder_ipc_ns_exports.py" "$PWD"
 
-    - name: Enable IPC configs
-      if: inputs.version != 'android17-6.18'
-      uses: ./.github/actions/set-kernel-config
-      with:
-        config_list: |
-          CONFIG_SYSVIPC=y
-          CONFIG_POSIX_MQUEUE=y
-          CONFIG_IPC_NS=y
-          CONFIG_PID_NS=y
-
-    - name: Enable Kernel Configs
-      uses: ./.github/actions/set-kernel-config
-      with:
-        # Full DroidSpaces support set, mirroring upstream's
-        # Documentation/resources/.../gki config list. Kept complete here rather
-        # than relying on the NET/misc actions, so a DS build is self-contained
-        # even when those features are switched off for a dispatch.
-        config_list: |
-          # optional but recommended: docker's unsafe procfs check
-          CONFIG_USER_NS=y
-
-          # HW access
-          CONFIG_DEVTMPFS=y
-
-          # binfmt: running distro binaries out of the container
-          CONFIG_BINFMT_MISC=y
-          CONFIG_BINFMT_SCRIPT=y
-          CONFIG_BINFMT_ELF=y
-
-          # xattr / posix acl on tmpfs (NixOS)
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_TMPFS_XATTR=y
-
-          # Networking: enhanced NAT support
-          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
-          CONFIG_IP6_NF_NAT=y
-          CONFIG_IP6_NF_TARGET_MASQUERADE=y
-          # macvlan mode (--net=macvlan); self-contained driver
-          CONFIG_MACVLAN=y
-
-          # UFW - reject target. Upstream's list says NETFILTER_XT_TARGET_REJECT,
-          # which no 5.10/5.15/6.1/6.6/6.12/6.18 tree declares: the iptables
-          # REJECT target is built by ipt_REJECT.o under IP_NF_TARGET_REJECT
-          # (net/ipv4/netfilter/Kconfig) and ip6t_REJECT.o under
-          # IP6_NF_TARGET_REJECT. The old name was a silent no-op - the defconfig
-          # gained a line Kconfig then dropped.
-          CONFIG_IP_NF_TARGET_REJECT=y
-          CONFIG_IP6_NF_TARGET_REJECT=y
-          CONFIG_NETFILTER_XT_TARGET_LOG=y
-          CONFIG_NETFILTER_XT_MATCH_RECENT=y
-
-          # fail2ban
-          CONFIG_IP_SET=y
-          CONFIG_IP_SET_HASH_IP=y
-          CONFIG_IP_SET_HASH_NET=y
-          CONFIG_NETFILTER_XT_SET=y
-
+    - name: Apply the DS config set as a post-defconfig fragment
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+        {
+          cat <<'CFG'
+        # optional but recommended: docker's unsafe procfs check
+        CONFIG_USER_NS=y
+        
+        # HW access
+        CONFIG_DEVTMPFS=y
+        
+        # binfmt: running distro binaries out of the container
+        CONFIG_BINFMT_MISC=y
+        CONFIG_BINFMT_SCRIPT=y
+        CONFIG_BINFMT_ELF=y
+        
+        # xattr / posix acl on tmpfs (NixOS)
+        CONFIG_TMPFS_POSIX_ACL=y
+        CONFIG_TMPFS_XATTR=y
+        
+        # Networking: enhanced NAT support
+        CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+        CONFIG_IP6_NF_NAT=y
+        CONFIG_IP6_NF_TARGET_MASQUERADE=y
+        # macvlan mode (--net=macvlan); self-contained driver
+        CONFIG_MACVLAN=y
+        
+        # UFW - reject target. Upstream's list says NETFILTER_XT_TARGET_REJECT,
+        # which no 5.10/5.15/6.1/6.6/6.12/6.18 tree declares: the iptables
+        # REJECT target is built by ipt_REJECT.o under IP_NF_TARGET_REJECT
+        # (net/ipv4/netfilter/Kconfig) and ip6t_REJECT.o under
+        # IP6_NF_TARGET_REJECT. The old name was a silent no-op - the defconfig
+        # gained a line Kconfig then dropped.
+        CONFIG_IP_NF_TARGET_REJECT=y
+        CONFIG_IP6_NF_TARGET_REJECT=y
+        CONFIG_NETFILTER_XT_TARGET_LOG=y
+        CONFIG_NETFILTER_XT_MATCH_RECENT=y
+        
+        # fail2ban
+        CONFIG_IP_SET=y
+        CONFIG_IP_SET_HASH_IP=y
+        CONFIG_IP_SET_HASH_NET=y
+        CONFIG_NETFILTER_XT_SET=y
+        CFG
+        if [ "${{ inputs.version }}" != "android17-6.18" ]; then
+          cat <<'CFG'
+        CONFIG_SYSVIPC=y
+        CONFIG_POSIX_MQUEUE=y
+        CONFIG_IPC_NS=y
+        CONFIG_PID_NS=y
+        CFG
+        fi
+        } > droidspaces_defconfig
+        grep -q 'name = "droidspaces_defconfig"' BUILD.bazel || cat >> BUILD.bazel <<'BZ'
+        
+        filegroup(
+            name = "droidspaces_defconfig",
+            srcs = ["droidspaces_defconfig"],
+            visibility = ["//visibility:public"],
+        )
+        BZ
+        grep -q 'post_defconfig_fragments = \[":droidspaces_defconfig"\]' BUILD.bazel || \
+          sed -i '0,/name = "kernel_aarch64",/s//name = "kernel_aarch64",\n    post_defconfig_fragments = [":droidspaces_defconfig"],/' BUILD.bazel
