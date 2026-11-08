@@ -78,14 +78,11 @@ runs:
         fi
 
     - name: Export IPC symbols for module linkage
+      if: inputs.version == 'android16-6.12' || inputs.version == 'android17-6.18'
       shell: bash
-      if: inputs.version == 'android16-6.12'
-      working-directory: ${{ github.workspace }}/kernel
+      working-directory: ${{ github.workspace }}/kernel/common
       run: |
-        echo >> "${{ github.workspace }}/kernel/common/ipc/namespace.c"
-        echo 'EXPORT_SYMBOL_GPL(put_ipc_ns);' >> "${{ github.workspace }}/kernel/common/ipc/namespace.c"
-        echo >> "${{ github.workspace }}/kernel/common/ipc/msgutil.c"
-        echo 'EXPORT_SYMBOL_GPL(init_ipc_ns);' >> "${{ github.workspace }}/kernel/common/ipc/msgutil.c"
+        python3 "${{ github.workspace }}/.github/scripts/binder_ipc_ns_exports.py" "$PWD"
 
     - name: Enable Kernel Configs
       uses: ./.github/actions/set-kernel-config

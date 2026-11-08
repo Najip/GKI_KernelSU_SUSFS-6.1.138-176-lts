@@ -288,21 +288,6 @@ jobs:
             CONFIG_KSU_SUSFS_OPEN_REDIRECT=n
             CONFIG_KSU_SUSFS_SUS_MAP=n
 
-      - name: 6.18 exports the ipc_ns symbols rust_binder needs
-        # android17-6.18's gki_defconfig builds CONFIG_ANDROID_BINDER_IPC_RUST=m
-        # and the Rust driver references init_ipc_ns / put_ipc_ns, which this
-        # tree does not export, so modpost fails:
-        #   ERROR: modpost: "put_ipc_ns" [drivers/android/binder/rust_binder.ko] undefined!
-        # Turning the module off is NOT an option - Kleaf's GKI target expects
-        # drivers/android/binder/rust_binder.ko in its outputs and the build dies
-        # with "Unable to find drivers/android/binder/rust_binder.ko in any of
-        # the following directories". Export both symbols instead (GPL-only).
-        if: inputs.version == 'android17-6.18'
-        shell: bash
-        working-directory: ${{ github.workspace }}/kernel/common
-        run: |
-          python3 "${{ github.workspace }}/.github/scripts/binder_ipc_ns_exports.py" "$PWD"
-
       - name: Single manager for BakaSU (multi-manager off)
         # BakaSU's Kconfig ships CONFIG_KSU_MULTI_MANAGER_SUPPORT=y, which
         # compiles three rows into apk_sign_keys[]: its own key plus
