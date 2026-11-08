@@ -83,23 +83,11 @@ runs:
           if [ "$PAGE_SIZE" = "16k" ]; then
             PAGE_SIZE_FLAGS+=(--page_size=16k)
           fi
-          # 6.18 stopped declaring the per-file label //common:kernel_aarch64/Image
-          # even though the macro still emits that file (verified with
-          # `tools/bazel query` / `cquery --output=files` on the 6.18 tree:
-          # the label errors out with "did you mean kernel_aarch64_images?",
-          # cquery lists bazel-out/.../kernel_aarch64/Image). Build the macro
-          # target there; the rest of this action already reads the image from
-          # bazel-bin/common/kernel_aarch64/Image, which is unchanged.
-          if [ "${{ inputs.version }}" = "android17-6.18" ]; then
-            BAZEL_TARGET=//common:kernel_aarch64
-          else
-            BAZEL_TARGET=//common:kernel_aarch64/Image
-          fi
           tools/bazel build \
             --config=fast \
             "${PAGE_SIZE_FLAGS[@]}" \
             --disk_cache=/home/runner/.cache/bazel \
-            "$BAZEL_TARGET"
+            //common:kernel_aarch64_abi
         fi
 
     - name: 'Verify Page Size in Generated .config'
