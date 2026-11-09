@@ -100,36 +100,10 @@ jobs:
           path: stock-configs
 
       - name: Validate Page Size
-        shell: bash
-        run: |
-          set -euo pipefail
-          PAGE_SIZE="${{ inputs.page_size }}"
-          case "$PAGE_SIZE" in
-            4k) exit 0 ;;
-            16k) ;;
-            *) echo "ERROR: unsupported page_size '$PAGE_SIZE' (expected 4k or 16k)." >&2; exit 1 ;;
-          esac
-          # Kleaf exposes --page_size only on the build branches used by these
-          # GKI families (main-kernel-build-2023/2024, main-kernel-2025).
-          case "${{ inputs.version }}" in
-            android14-6.1|android15-6.6|android16-6.12|android17-6.18) ;;
-            *)
-              echo "ERROR: page_size=16k is not supported for ${{ inputs.version }}." >&2
-              echo "Supported families: android14-6.1, android15-6.6, android16-6.12, android17-6.18." >&2
-              exit 1
-              ;;
-          esac
-
-      # Runs on every leg, trimmed to the parts that pay for themselves.
-      # Measured from a leg's own log: the full option set took 106 s to recover
-      # 39.8 GB, of which the package globs (postgresql*/mysql*/*llvm*/
-      # temurin-*/dotnet-sdk-*) were 46 s for 6.4 GB -- the slowest and least
-      # space-efficient part. Dropping them leaves ~54 s for ~32 GB, and the
-      # explicit package names still remove the browsers and cloud CLIs.
-      # Runner budget for reference: 145 GB disk, ~55 GB used by the image, so
-      # ~90 GB free before this step and ~114 GB after it (the 16 GiB LTO
-      # swapfile takes 16 GB back). The kleaf families are the reason to keep it
-      # on all 621 legs even though the legacy ones have room to spare.
+        uses: ./.github/actions/validate-page-size
+        with:
+          page_size: ${{ inputs.page_size }}
+          version: ${{ inputs.version }}
       - name: Free Disk Space
         if: true
         uses: endersonmenezes/free-disk-space@v4 # Use @main for latest, @v3 for stable
@@ -168,10 +142,7 @@ jobs:
           os_patch_level: ${{ inputs.os_patch_level }}
 
       - name: Initialize Config Fragment
-        run: |
-          mkdir -p "${{ github.workspace }}/kernel/common"
-          : > "${{ github.workspace }}/kernel/common/wild.fragment"
-
+        uses: ./.github/actions/initialize-config-fragment
       - name: Spoof /proc/config.gz With Stock Config
         uses: ./.github/actions/stock-config
         with:
@@ -180,32 +151,9 @@ jobs:
           stock_config_dir: stock-configs
 
       - name: Set Build Timestamp from Kernel Commit
-        shell: bash
-        run: |
-          set -x
-          # Hardcode the build timestamp to the 5th day of the patch level
-          # at 04:20 UTC, using the existing timestamp formats expected by the build.
-          OS_PATCH_LEVEL_INPUT="${{ inputs.os_patch_level }}"
-          if [[ "$OS_PATCH_LEVEL_INPUT" == lts* ]]; then
-            if [[ "$OS_PATCH_LEVEL_INPUT" =~ ^lts-([0-9]{2})$ ]]; then
-              OS_PATCH_LEVEL_YM="$(date -u +%Y)-${BASH_REMATCH[1]}"
-            else
-              OS_PATCH_LEVEL_YM="$(date -u +%Y-%m)"
-            fi
-          else
-            OS_PATCH_LEVEL_YM="$OS_PATCH_LEVEL_INPUT"
-          fi
-          FIXED_BUILD_DATE="${OS_PATCH_LEVEL_YM}-05 04:20:00 UTC"
-          SOURCE_DATE_EPOCH=$(date -u -d "$FIXED_BUILD_DATE" +%s)
-          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> $GITHUB_ENV
-          KBUILD_TS=$(date -u -d @${SOURCE_DATE_EPOCH} '+%a %b %d %H:%M:%S UTC %Y')
-          echo "KBUILD_BUILD_TIMESTAMP=${KBUILD_TS}" >> $GITHUB_ENV
-          # Keep git metadata aligned with the same fixed timestamp.
-          GIT_DATE=$(date -u -d @${SOURCE_DATE_EPOCH} '+%Y-%m-%dT%H:%M:%SZ')
-          echo "GIT_COMMITTER_DATE=${GIT_DATE}" >> $GITHUB_ENV
-          echo "GIT_AUTHOR_DATE=${GIT_DATE}" >> $GITHUB_ENV
-          echo "Build timestamp set to: $(date -u -d @${SOURCE_DATE_EPOCH} '+%Y-%m-%d %H:%M:%S UTC') (epoch: $SOURCE_DATE_EPOCH)"
-
+        uses: ./.github/actions/set-build-timestamp-from-kernel-commit
+        with:
+          os_patch_level: ${{ inputs.os_patch_level }}
       - name: Extract Sublevel and Set File Name
         id: extract
         uses: ./.github/actions/extract-sublevel-file-name
@@ -228,21 +176,16 @@ jobs:
 
       - name: Reject KowSU with SUSFS
         if: inputs.root_flavor == 'kowsu' && (contains(inputs.feature_set, 'SUSFS') || inputs.feature_set == 'All')
-        shell: bash
-        run: |
-          echo "ERROR: KowSU does not work together with SUSFS — re-run with SUSFS off." >&2
-          exit 1
-
+        uses: ./.github/actions/reject-kowsu-with-susfs
+        with:
+          feature_set: ${{ inputs.feature_set }}
+          root_flavor: ${{ inputs.root_flavor }}
       - name: Reject FinaSU without SUSFS
-        # FinaSU's kernel hard-depends on the susfs headers and its supercall
-        # dispatch references susfs symbols unguarded, so a susfs-less build
-        # cannot link. Unlike KernelSU/BakaSU there is no susfs-free shape.
         if: inputs.root_flavor == 'finasu' && !contains(inputs.feature_set, 'SUSFS')
-        shell: bash
-        run: |
-          echo "ERROR: FinaSU requires SUSFS — re-run with SUSFS on." >&2
-          exit 1
-
+        uses: ./.github/actions/reject-finasu-without-susfs
+        with:
+          feature_set: ${{ inputs.feature_set }}
+          root_flavor: ${{ inputs.root_flavor }}
       - name: Setup Selected Root Implementation
         if: inputs.root_flavor != '' && inputs.root_flavor != 'none'
         uses: ./.github/actions/root-setup
@@ -252,15 +195,9 @@ jobs:
 
       - name: Mark No Root build metadata
         if: inputs.root_flavor == 'none'
-        shell: bash
-        run: |
-          {
-            echo "ROOT_IMPLEMENTATION=none"
-            echo "ROOT_MANAGER=N/A"
-            echo "ROOT_VERSION=N/A"
-            echo "ROOT_COMMIT=N/A"
-          } >> "$GITHUB_ENV"
-
+        uses: ./.github/actions/mark-no-root-build-metadata
+        with:
+          root_flavor: ${{ inputs.root_flavor }}
       - name: Disable SUSFS for BakaSU without SUSFS feature
         if: inputs.root_flavor == 'bakasu' && !contains(inputs.feature_set, 'SUSFS')
         uses: ./.github/actions/add-configs
@@ -322,21 +259,10 @@ jobs:
             CONFIG_KSU_TOOLKIT_SUPPORT=y
 
       - name: Single manager for SukiSU-Ultra (trim cert table)
-        # SukiSU hardcodes seven trusted manager certificates in
-        # kernel/manager/apk_sign.c (SukiSU, RKSU, KSU, WKSU, KowSU, KSUN, MKSU)
-        # and is_manager_apk() accepts the first match - no flags, no Kconfig,
-        # no Kbuild knob. The signature-fallback crowner in
-        # kernel/extension/dynamic_sig_fallback.c reuses is_manager_apk(), so
-        # trimming to one row narrows that path too. We keep SukiSU's own cert
-        # (0x35c / 947ae944…), the key the manager APK we ship is signed with.
-        # The script self-verifies and exits 1 if the table shape changes.
         if: inputs.root_flavor == 'sukisu-ultra'
-        shell: bash
-        working-directory: ${{ github.workspace }}/kernel
-        run: |
-          set -euo pipefail
-          python3 "${GITHUB_WORKSPACE}/.github/scripts/trim_sukisu_managers.py" SukiSU-Ultra
-
+        uses: ./.github/actions/single-manager-for-sukisu-ultra-trim-cert-table
+        with:
+          root_flavor: ${{ inputs.root_flavor }}
       - name: Single manager for FinaSU (dynamic manager off)
         # Upstream ships CONFIG_KSU_DYNAMIC_MANAGER=y, which compiles a
         # nine-row signature table: FINASU_TRUSTED_* as the only trusted row
@@ -529,51 +455,10 @@ jobs:
 
       - name: Extract the built .config
         if: always()
-        shell: bash
-        working-directory: ${{ github.workspace }}/kernel
-        run: |
-          set -euo pipefail
-          # Kleaf writes it under the kernel_config rule output; build.sh writes it
-          # into OUT_DIR. Locate it rather than hardcoding one path.
-          CONFIG_FILE=""
-          for candidate in \
-            bazel-bin/common/kernel_aarch64_config/out_dir/.config \
-            /home/runner/out/.config; do
-            if [ -f "$candidate" ]; then CONFIG_FILE="$candidate"; break; fi
-          done
-          if [ -z "$CONFIG_FILE" ]; then
-            CONFIG_FILE="$(find bazel-bin/common /home/runner/out -maxdepth 4 -name .config -type f 2>/dev/null | head -n1 || true)"
-          fi
-          if [ -z "${CONFIG_FILE:-}" ]; then
-            echo "::warning title=.config::no .config in the build output - nothing to report"
-            exit 0
-          fi
-          cp "$CONFIG_FILE" "${{ github.workspace }}/built.config"
-          echo "built.config <- $CONFIG_FILE ($(grep -c '^CONFIG_' "$CONFIG_FILE") entries)"
-          {
-            echo ""
-            echo "### Built .config"
-            echo ""
-            echo "| | |"
-            echo "|---|---|"
-            echo "| source | \`$CONFIG_FILE\` |"
-            echo "| CONFIG_ entries | $(grep -c '^CONFIG_' "$CONFIG_FILE") |"
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-          echo "=== built .config (all $(grep -c '^CONFIG_' "$CONFIG_FILE") entries) ==="
-          cat "$CONFIG_FILE"
-
-          # The configs we asked for must actually be in there. olddefconfig drops a
-          # symbol the tree does not declare and restores values whose dependencies are
-          # off, so the fragment is verified against the resolved .config rather than
-          # trusted. Lines marked '# nocheck' are skipped, as Kleaf does.
-          FRAGMENT="${{ github.workspace }}/kernel/common/wild.fragment"
-          if [ -s "$FRAGMENT" ]; then
-            python3 "${{ github.workspace }}/.github/scripts/verify_fragment.py" \
-              "$FRAGMENT" --config "$CONFIG_FILE"
-          else
-            echo "no wild.fragment in this build - nothing to verify against"
-          fi
+        uses: ./.github/actions/extract-the-built-config
+      - name: Verify the fragment landed in .config
+        if: always()
+        uses: ./.github/actions/verify-fragment
 
       - name: Consolidated Build Summary
         id: build-summary
