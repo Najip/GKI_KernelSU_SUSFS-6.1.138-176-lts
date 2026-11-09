@@ -1,97 +1,164 @@
 name: Sync Custom Main Workflow
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17,47 * * * *'
 permissions:
   contents: write
 concurrency:
-  group: custom-main-sync-${{ github.ref }}
+  group: custom-main-watcher-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   sync:
-    if: github.repository == 'Najip/GKI_KernelSU_SUSFS-6.1.138-176-lts' && github.ref == 'refs/heads/feat/usb-arsenal'
+    if: github.repository == 'Najip/GKI_KernelSU_SUSFS-6.1.138-176-lts' && (github.ref_name == 'main' || github.ref_name == 'feat/usb-arsenal')
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(github.event_name == 'schedule' && '["main","feat/usb-arsenal"]' || format('["{0}"]', github.ref_name)) }}
+    concurrency:
+      group: custom-main-sync-${{ matrix.branch }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: feat/usb-arsenal
+          ref: ${{ matrix.branch }}
           fetch-depth: 0
           token: ${{ secrets.WORKFLOW_PAT || github.token }}
+      - name: Check for missing upstream commits
+        id: check
+        shell: bash
+        env:
+          BRANCH: ${{ matrix.branch }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/heads/$BRANCH"
+          original=$(git rev-parse FETCH_HEAD)
+          test "$(git rev-parse HEAD)" = "$original"
+          git fetch https://github.com/WildKernels/GKI_KernelSU_SUSFS.git "refs/heads/$BRANCH"
+          upstream=$(git rev-parse FETCH_HEAD)
+          echo "original=$original" >> "$GITHUB_OUTPUT"
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$upstream" "$original" && [ "$EVENT" = schedule ]; then
+            echo 'needed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'needed=true' >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-python@v5
+        if: steps.check.outputs.needed == 'true'
         with:
           python-version: '3.11'
-      - name: Install actionlint
+      - name: Install validators
+        if: steps.check.outputs.needed == 'true'
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m pip install 'PyYAML==6.0.2'
           GOPROXY=https://proxy.golang.org go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
           sudo install -m 0755 "$(go env GOPATH)/bin/actionlint" /usr/local/bin/actionlint
-          actionlint -version
-      - name: Merge upstream, reset only on conflict, regenerate and publish
+      - name: Merge upstream and regenerate
+        if: steps.check.outputs.needed == 'true'
         shell: bash
         env:
+          BRANCH: ${{ matrix.branch }}
+          ORIGINAL: ${{ steps.check.outputs.original }}
+          UPSTREAM: ${{ steps.check.outputs.upstream }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          branch=feat/usb-arsenal
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin "refs/heads/$branch"
-          original=$(git rev-parse FETCH_HEAD)
-          test "$(git rev-parse HEAD)" = "$original" || { echo '::error::Branch changed after checkout; start a new run'; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
           saved=$(mktemp -d)
           trap 'rm -rf "$saved"' EXIT
           tools=(.github/scripts/apply_custom_main.py .github/scripts/safe_custom_main.py .github/workflows/sync-custom-main.yml)
-          for path in "${tools[@]}"; do test -f "$path"; done
+          if [ -f .github/scripts/normalize_removed_inputs.py ]; then tools+=(.github/scripts/normalize_removed_inputs.py); fi
           tar -cf "$saved/tools.tar" "${tools[@]}"
           custom=.github/workflows/main-6.1.x-kernelsupin-nods.yml
           for path in "$custom" "$custom.bak"; do
             if [ -f "$path" ]; then cp "$path" "$saved/$(basename "$path")"; fi
           done
-          git fetch https://github.com/WildKernels/GKI_KernelSU_SUSFS.git refs/heads/feat/usb-arsenal
-          upstream=$(git rev-parse FETCH_HEAD)
           mode=merge
-          if git merge --no-edit "$upstream"; then
-            echo 'Normal merge succeeded; retaining fork-only changes.'
-          else
-            if [ -z "$(git ls-files -u)" ]; then
-              echo '::error::Merge failed without content conflicts; refusing destructive fallback'
-              exit 1
-            fi
+          if ! git merge --no-edit "$UPSTREAM"; then
+            test -n "$(git ls-files -u)" || { echo '::error::Merge failed without conflicts; refusing reset'; exit 1; }
             git merge --abort
             mode=conflict-reset
-            git reset --hard "$upstream"
+            git reset --hard "$UPSTREAM"
             git clean -fd
             tar -xf "$saved/tools.tar"
             for path in "$custom" "$custom.bak"; do
               if [ -f "$saved/$(basename "$path")" ]; then cp "$saved/$(basename "$path")" "$path"; fi
             done
-            rm -f .github/.custom-main-sync.sha
           fi
-          python3 .github/scripts/safe_custom_main.py
+          python3 - <<'PY'
+          import hashlib, inspect, os, re, runpy, subprocess, tempfile
+          from pathlib import Path
+          import yaml
+          source = Path('.github/workflows/main.yml')
+          custom = Path('.github/workflows/main-6.1.x-kernelsupin-nods.yml')
+          backup = Path(str(custom) + '.bak')
+          state = Path('.github/.custom-main-sync.sha')
+          paths = [source, Path('.github/workflows/sync-custom-main.yml'), *sorted(Path('.github/scripts').glob('*custom_main.py'))]
+          fingerprint = hashlib.sha256(b''.join(str(p).encode() + b'\0' + p.read_bytes() for p in paths)).hexdigest()
+          if custom.exists() and state.exists() and state.read_text().strip() == fingerprint:
+              raise SystemExit(0)
+          fd, name = tempfile.mkstemp(prefix='custom-main-candidate-', suffix='.yml', dir=custom.parent)
+          os.close(fd)
+          candidate = Path(name)
+          try:
+              rules = runpy.run_path('.github/scripts/apply_custom_main.py')
+              if 'transform' in rules:
+                  candidate.write_text(rules['transform'](source.read_text()))
+              else:
+                  safe = runpy.run_path('.github/scripts/safe_custom_main.py')
+                  if len(inspect.signature(safe['main']).parameters) != 2:
+                      raise ValueError('Unsupported generator interface')
+                  safe['main'](str(source), str(candidate))
+              text = candidate.read_text()
+              root = dict((k.value, v) for k, v in yaml.compose(text).value)
+              events = root['on']
+              dispatch = next(v for k, v in events.value if k.value == 'workflow_dispatch')
+              lines = text.splitlines(keepends=True)
+              start = events.start_mark.line
+              end = events.end_mark.line
+              stop = dispatch.end_mark.line
+              text = ''.join(lines[:start]) + ''.join(lines[dispatch.start_mark.line:stop]) + '\n' + ''.join(lines[end:])
+              original_inputs = dict((k.value, v) for k, v in next(v for k, v in dict((k.value,v) for k,v in yaml.compose(source.read_text()).value)['on'].value if k.value == 'workflow_dispatch').value)['inputs']
+              generated_root = dict((k.value, v) for k, v in yaml.compose(text).value)
+              generated_dispatch = next(v for k, v in generated_root['on'].value if k.value == 'workflow_dispatch')
+              inputs = dict((k.value,v) for k,v in generated_dispatch.value)['inputs']
+              names = {k.value for k,v in inputs.value}
+              if len(names) > 25:
+                  raise ValueError('More than 25 dispatch inputs')
+              for key in ('test_release_notes', 'use_nomount', 'use_ds'):
+                  if key not in names and any(k.value == key for k,v in original_inputs.value):
+                      text = re.sub(r'\binputs\.' + key + r'\b', 'false', text)
+              candidate.write_text(text)
+              subprocess.run(['actionlint', str(candidate)], check=True)
+              if not custom.exists() or custom.read_bytes() != candidate.read_bytes():
+                  if custom.exists():
+                      old = custom.read_bytes()
+                      backup.unlink(missing_ok=True)
+                      backup.write_bytes(old)
+                  os.replace(candidate, custom)
+              state.write_text(fingerprint + '\n')
+              for p in (custom, backup, state):
+                  if p.exists():
+                      subprocess.run(['git', 'add', str(p)], check=True)
+          finally:
+              candidate.unlink(missing_ok=True)
+          PY
           actionlint .github/workflows/sync-custom-main.yml
           git add -- "${tools[@]}"
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: sync custom main with upstream ${upstream:0:12}"
-          fi
-          if [ "$(git rev-parse HEAD)" = "$original" ]; then
-            echo 'No changes to publish.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          backup="backup/usb-arsenal-before-sync-${RUN_ID}-${RUN_ATTEMPT}"
-          git push origin "$original:refs/heads/$backup"
+          if ! git diff --cached --quiet; then git commit -m "chore: sync custom main with upstream ${UPSTREAM:0:12}"; fi
+          if [ "$(git rev-parse HEAD)" = "$ORIGINAL" ]; then exit 0; fi
+          backup="backup/${BRANCH//\//-}-before-sync-${RUN_ID}-${RUN_ATTEMPT}"
+          git push origin "$ORIGINAL:refs/heads/$backup"
           if [ "$mode" = conflict-reset ]; then
-            git push --force-with-lease="refs/heads/$branch:$original" origin "HEAD:refs/heads/$branch"
+            git push --force-with-lease="refs/heads/$BRANCH:$ORIGINAL" origin "HEAD:refs/heads/$BRANCH"
           else
-            remote=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
-            test "$remote" = "$original" || { echo '::error::Branch changed; start a new run'; exit 1; }
-            git push origin "HEAD:refs/heads/$branch"
+            test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$ORIGINAL"
+            git push origin "HEAD:refs/heads/$BRANCH"
           fi
-          {
-            echo '### Upstream sync completed'
-            echo "Mode: $mode"
-            echo "Upstream revision: $upstream"
-            echo "Previous branch revision: $original"
-            echo "Backup branch: $backup"
-            echo 'Custom workflow and sync workflow validated.'
-          } >> "$GITHUB_STEP_SUMMARY"
+          printf 'Branch: %s\nMode: %s\nUpstream: %s\nBackup: %s\n' "$BRANCH" "$mode" "$UPSTREAM" "$backup" >> "$GITHUB_STEP_SUMMARY"
