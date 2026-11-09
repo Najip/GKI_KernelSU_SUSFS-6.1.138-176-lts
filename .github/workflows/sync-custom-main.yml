@@ -123,7 +123,7 @@ jobs:
               start = events.start_mark.line
               end = events.end_mark.line
               stop = dispatch.end_mark.line
-              text = ''.join(lines[:start]) + ''.join(lines[dispatch.start_mark.line:stop]) + '\n' + ''.join(lines[end:])
+              text = ''.join(lines[:start]) + ''.join(lines[next(k.start_mark.line for k, v in events.value if k.value == 'workflow_dispatch'):stop]) + '\n' + ''.join(lines[end:])
               original_inputs = dict((k.value, v) for k, v in next(v for k, v in dict((k.value,v) for k,v in yaml.compose(source.read_text()).value)['on'].value if k.value == 'workflow_dispatch').value)['inputs']
               generated_root = dict((k.value, v) for k, v in yaml.compose(text).value)
               generated_dispatch = next(v for k, v in generated_root['on'].value if k.value == 'workflow_dispatch')
