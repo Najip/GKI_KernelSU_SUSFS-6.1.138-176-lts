@@ -47,7 +47,6 @@ jobs:
           REVERT_SHA: ${{ inputs.revert_sha }}
           FORCE_TIP: ${{ inputs.force_upstream_tip }}
         run: |
-          # shellcheck disable=SC2100,SC2153
           set -euo pipefail
           if [ -n "$UPSTREAM_SHA" ] && [ -n "$REVERT_SHA" ]; then
             echo '::error::Set either upstream_sha or revert_sha, not both.' >&2
@@ -59,11 +58,11 @@ jobs:
           done
           mode=auto
           if [ -n "$UPSTREAM_SHA" ]; then
-            mode=upstream-sha
+            mode='upstream-sha'
           elif [ -n "$REVERT_SHA" ]; then
-            mode=revert-sha
+            mode='revert-sha'
           elif [ "$FORCE_TIP" = "true" ]; then
-            mode=upstream-tip
+            mode='upstream-tip'
           fi
           git fetch origin "refs/heads/$BRANCH"
           original=$(git rev-parse FETCH_HEAD)
@@ -101,7 +100,7 @@ jobs:
         shell: bash
         env:
           BRANCH: ${{ matrix.branch }}
-          MODE: ${{ steps.target.outputs.mode }}
+          SYNC_OPERATION: ${{ steps.target.outputs.mode }}
           ORIGINAL: ${{ steps.target.outputs.original }}
           UPSTREAM: ${{ steps.target.outputs.upstream }}
           UPSTREAM_SHA: ${{ inputs.upstream_sha }}
@@ -109,7 +108,6 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          # shellcheck disable=SC2153
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
@@ -122,7 +120,7 @@ jobs:
           for path in "$custom" "$custom.bak"; do
             if [ -f "$path" ]; then cp "$path" "$saved/$(basename "$path")"; fi
           done
-          mode="$MODE"
+          mode="$SYNC_OPERATION"
           target="$UPSTREAM"
           push_mode=force
           case "$mode" in
@@ -154,7 +152,7 @@ jobs:
               else
                 test -n "$(git ls-files -u)" || { echo '::error::Merge failed without conflicts; refusing reset'; exit 1; }
                 git merge --abort
-                mode=conflict-reset
+                mode='conflict-reset'
                 git reset --hard "$UPSTREAM"
                 git clean -fd
               fi
