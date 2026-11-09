@@ -26,7 +26,7 @@ jobs:
           GOPROXY=https://proxy.golang.org go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
           sudo install -m 0755 "$(go env GOPATH)/bin/actionlint" /usr/local/bin/actionlint
           actionlint -version
-      - name: Replace with upstream, reapply custom tooling, validate and publish
+      - name: Merge upstream, reset only on conflict, regenerate and publish
         shell: bash
         env:
           RUN_ID: ${{ github.run_id }}
@@ -42,40 +42,56 @@ jobs:
           saved=$(mktemp -d)
           trap 'rm -rf "$saved"' EXIT
           tools=(.github/scripts/apply_custom_main.py .github/scripts/safe_custom_main.py .github/workflows/sync-custom-main.yml)
-          for path in "${tools[@]}"; do
-            test -f "$path"
-          done
+          for path in "${tools[@]}"; do test -f "$path"; done
           tar -cf "$saved/tools.tar" "${tools[@]}"
           custom=.github/workflows/main-6.1.x-kernelsupin-nods.yml
           for path in "$custom" "$custom.bak"; do
-            if [ -f "$path" ]; then
-              cp "$path" "$saved/$(basename "$path")"
-            fi
+            if [ -f "$path" ]; then cp "$path" "$saved/$(basename "$path")"; fi
           done
           git fetch https://github.com/WildKernels/GKI_KernelSU_SUSFS.git refs/heads/feat/usb-arsenal
           upstream=$(git rev-parse FETCH_HEAD)
-          git reset --hard "$upstream"
-          git clean -fd
-          tar -xf "$saved/tools.tar"
-          for path in "$custom" "$custom.bak"; do
-            if [ -f "$saved/$(basename "$path")" ]; then
-              cp "$saved/$(basename "$path")" "$path"
+          mode=merge
+          if git merge --no-edit "$upstream"; then
+            echo 'Normal merge succeeded; retaining fork-only changes.'
+          else
+            if [ -z "$(git ls-files -u)" ]; then
+              echo '::error::Merge failed without content conflicts; refusing destructive fallback'
+              exit 1
             fi
-          done
-          rm -f .github/.custom-main-sync.sha
+            git merge --abort
+            mode=conflict-reset
+            git reset --hard "$upstream"
+            git clean -fd
+            tar -xf "$saved/tools.tar"
+            for path in "$custom" "$custom.bak"; do
+              if [ -f "$saved/$(basename "$path")" ]; then cp "$saved/$(basename "$path")" "$path"; fi
+            done
+            rm -f .github/.custom-main-sync.sha
+          fi
           python3 .github/scripts/safe_custom_main.py
           actionlint .github/workflows/sync-custom-main.yml
           git add -- "${tools[@]}"
           if ! git diff --cached --quiet; then
-            git commit -m "chore: reapply custom main on upstream ${upstream:0:12}"
+            git commit -m "chore: sync custom main with upstream ${upstream:0:12}"
+          fi
+          if [ "$(git rev-parse HEAD)" = "$original" ]; then
+            echo 'No changes to publish.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           backup="backup/usb-arsenal-before-sync-${RUN_ID}-${RUN_ATTEMPT}"
           git push origin "$original:refs/heads/$backup"
-          git push --force-with-lease="refs/heads/$branch:$original" origin "HEAD:refs/heads/$branch"
+          if [ "$mode" = conflict-reset ]; then
+            git push --force-with-lease="refs/heads/$branch:$original" origin "HEAD:refs/heads/$branch"
+          else
+            remote=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+            test "$remote" = "$original" || { echo '::error::Branch changed; start a new run'; exit 1; }
+            git push origin "HEAD:refs/heads/$branch"
+          fi
           {
             echo '### Upstream sync completed'
+            echo "Mode: $mode"
             echo "Upstream revision: $upstream"
             echo "Previous branch revision: $original"
             echo "Backup branch: $backup"
-            echo 'Custom presets regenerated and actionlint validation passed.'
+            echo 'Custom workflow and sync workflow validated.'
           } >> "$GITHUB_STEP_SUMMARY"
