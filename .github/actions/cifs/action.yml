@@ -19,7 +19,7 @@ runs:
           # entry the tree cannot satisfy -
           #   CONFIG_NETFS_SUPPORT: actual '', expected 'CONFIG_NETFS_SUPPORT=y'
           # - so it is marked nocheck; CIFS=y is what actually pulls netfs in.
-          CONFIG_NETFS_SUPPORT=y # nocheck
+          CONFIG_NETFS_SUPPORT=y # nocheck: CIFS selects NETFS_SUPPORT only on trees that use netfs; 5.15 and 6.1 do not
           CONFIG_KEYS=y
           CONFIG_CIFS_XATTR=y
           CONFIG_CIFS_POSIX=y
