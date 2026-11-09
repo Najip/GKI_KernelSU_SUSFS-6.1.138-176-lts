@@ -8,11 +8,13 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sync:
+    if: github.repository == 'Najip/GKI_KernelSU_SUSFS-6.1.138-176-lts' && github.ref == 'refs/heads/feat/usb-arsenal'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: feat/usb-arsenal
+          fetch-depth: 0
           token: ${{ secrets.WORKFLOW_PAT || github.token }}
       - uses: actions/setup-python@v5
         with:
@@ -21,19 +23,59 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go version
           GOPROXY=https://proxy.golang.org go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
           sudo install -m 0755 "$(go env GOPATH)/bin/actionlint" /usr/local/bin/actionlint
           actionlint -version
-      - name: Regenerate and validate temporary candidate
-        run: python3 .github/scripts/safe_custom_main.py
-      - name: Commit generated changes only
+      - name: Replace with upstream, reapply custom tooling, validate and publish
         shell: bash
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          branch=feat/usb-arsenal
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin "refs/heads/$branch"
+          original=$(git rev-parse FETCH_HEAD)
+          test "$(git rev-parse HEAD)" = "$original" || { echo '::error::Branch changed after checkout; start a new run'; exit 1; }
+          saved=$(mktemp -d)
+          trap 'rm -rf "$saved"' EXIT
+          tools=(.github/scripts/apply_custom_main.py .github/scripts/safe_custom_main.py .github/workflows/sync-custom-main.yml)
+          for path in "${tools[@]}"; do
+            test -f "$path"
+          done
+          tar -cf "$saved/tools.tar" "${tools[@]}"
+          custom=.github/workflows/main-6.1.x-kernelsupin-nods.yml
+          for path in "$custom" "$custom.bak"; do
+            if [ -f "$path" ]; then
+              cp "$path" "$saved/$(basename "$path")"
+            fi
+          done
+          git fetch https://github.com/WildKernels/GKI_KernelSU_SUSFS.git refs/heads/feat/usb-arsenal
+          upstream=$(git rev-parse FETCH_HEAD)
+          git reset --hard "$upstream"
+          git clean -fd
+          tar -xf "$saved/tools.tar"
+          for path in "$custom" "$custom.bak"; do
+            if [ -f "$saved/$(basename "$path")" ]; then
+              cp "$saved/$(basename "$path")" "$path"
+            fi
+          done
+          rm -f .github/.custom-main-sync.sha
+          python3 .github/scripts/safe_custom_main.py
+          actionlint .github/workflows/sync-custom-main.yml
+          git add -- "${tools[@]}"
           if ! git diff --cached --quiet; then
-            git commit -m "chore: sync custom main workflow"
-            git push origin "HEAD:${{ github.ref_name }}"
+            git commit -m "chore: reapply custom main on upstream ${upstream:0:12}"
           fi
+          backup="backup/usb-arsenal-before-sync-${RUN_ID}-${RUN_ATTEMPT}"
+          git push origin "$original:refs/heads/$backup"
+          git push --force-with-lease="refs/heads/$branch:$original" origin "HEAD:refs/heads/$branch"
+          {
+            echo '### Upstream sync completed'
+            echo "Upstream revision: $upstream"
+            echo "Previous branch revision: $original"
+            echo "Backup branch: $backup"
+            echo 'Custom presets regenerated and actionlint validation passed.'
+          } >> "$GITHUB_STEP_SUMMARY"
