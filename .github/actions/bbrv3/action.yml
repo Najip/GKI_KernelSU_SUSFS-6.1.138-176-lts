@@ -34,6 +34,7 @@ runs:
         PATCH_LEVEL: ${{ inputs.os_patch_level }}
       run: |
         set -euo pipefail
+        APPLIED=0
         # The *-lts branches drift from the monthly ones (e.g. 5.10-lts carries
         # tcp_min_rcvbuf between one_day_secs and the /* obsolete */ block, so
         # the monthly patch's sysctl_net_ipv4.c hunk no longer matches). When a
@@ -55,20 +56,26 @@ runs:
           echo "skipped"
         elif [[ ${{ inputs.version }} == "android15-6.6" ]]; then
           patch -p1 < "$(pick "$KP" 0001-net-tcp-backport-BBRv3-to-android15-6.6)"
+          APPLIED=1
         elif [[ ${{ inputs.version }} == "android14-6.1" ]]; then
           patch -p1 < "$(pick "$KP" 0001-net-tcp-backport-BBRv3-to-android14-6.1)"
+          APPLIED=1
         elif [[ ${{ inputs.version }} == "android14-5.15" ]]; then
           #patch -p1 < "${{ github.workspace }}/kernel_patches/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android13-5.15.patch"
           patch -p1 < "$(pick "$APATCHES" 0001-net-tcp-backport-BBRv3-to-android14-5.15)"
+          APPLIED=1
         elif [[ ${{ inputs.version }} == "android13-5.15" ]]; then
           patch -p1 < "$(pick "$KP" 0001-net-tcp-backport-BBRv3-to-android13-5.15)"
+          APPLIED=1
           if [[ ${{ inputs.sublevel }} -le "43" ]]; then
             patch -p1 < ${{ github.action_path }}/patches/0002-net-tcp-add-tcp_snd_cwnd-and-tcp_snd_cwnd_set-helper-functions.patch
           fi
         elif [[ ${{ inputs.version }} == "android13-5.10" ]]; then
           patch -p1 < "$(pick "$KP" 0001-net-tcp-backport-BBRv3-to-android12-5.10 0001-net-tcp-backport-BBRv3-to-android13-5.10)"
+          APPLIED=1
         elif [[ ${{ inputs.version }} == "android12-5.10" ]]; then
           patch -p1 < "$(pick "$KP" 0001-net-tcp-backport-BBRv3-to-android12-5.10)"
+          APPLIED=1
         fi
 
         if [[ ${{ inputs.version }} == "android12-5.10" || ${{ inputs.version }} == "android13-5.10" ]]; then
@@ -78,7 +85,11 @@ runs:
           fi
         fi
 
-        echo "[+] BBRv3 patches applied"
+        if [ "$APPLIED" = "1" ]; then
+          echo "[+] BBRv3 patches applied for ${{ inputs.version }}"
+        else
+          echo "[*] BBRv3: no patch for ${{ inputs.version }} - nothing applied, config will be skipped"
+        fi
 
     - name: Enable BBRv3 Kernel Config
       # Only when the patch actually declared the symbol. Kleaf's fragment check
