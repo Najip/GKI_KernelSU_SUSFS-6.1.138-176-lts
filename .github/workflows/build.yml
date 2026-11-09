@@ -456,6 +456,10 @@ jobs:
       - name: Extract the built .config
         if: always()
         uses: ./.github/actions/extract-the-built-config
+      - name: Verify the fragment landed in .config
+        if: always()
+        uses: ./.github/actions/verify-fragment
+
       - name: Consolidated Build Summary
         id: build-summary
         if: always()

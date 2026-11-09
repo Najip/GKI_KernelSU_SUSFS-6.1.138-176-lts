@@ -38,15 +38,3 @@ runs:
         } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
         echo "=== built .config (all $(grep -c '^CONFIG_' "$CONFIG_FILE") entries) ==="
         cat "$CONFIG_FILE"
-
-        # The configs we asked for must actually be in there. olddefconfig drops a
-        # symbol the tree does not declare and restores values whose dependencies are
-        # off, so the fragment is verified against the resolved .config rather than
-        # trusted. Lines marked '# nocheck' are skipped, as Kleaf does.
-        FRAGMENT="${{ github.workspace }}/kernel/common/wild.fragment"
-        if [ -s "$FRAGMENT" ]; then
-          python3 "${{ github.workspace }}/.github/scripts/verify_fragment.py" \
-            "$FRAGMENT" --config "$CONFIG_FILE"
-        else
-          echo "no wild.fragment in this build - nothing to verify against"
-        fi
