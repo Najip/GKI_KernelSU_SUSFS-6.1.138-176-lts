@@ -66,19 +66,23 @@ def main() -> None:
             elif actual[symbol] != expected:
                 wrong.append(f"{symbol}: wanted {expected}, .config has {actual[symbol]}")
 
-    for item in wrong:
-        print(f"ERROR: {item}", file=sys.stderr)
-    for item in missing:
-        print(f"ERROR: not in .config: {item}", file=sys.stderr)
+    # Every entry, so the log shows the comparison rather than only its verdict.
+    for fragment in args.fragments:
+        for symbol, expected, _raw in parse_fragment(fragment):
+            got = actual.get(symbol)
+            if got is None:
+                print(f"  MISSING  {symbol}: wanted {expected}, not in .config")
+            elif got != expected:
+                print(f"  WRONG    {symbol}: wanted {expected}, .config has {got}")
+            else:
+                print(f"  ok       {symbol}={expected}")
+
 
     if wrong or missing:
-        print(
-            f"ERROR: {len(wrong)} wrong, {len(missing)} missing of {checked} fragment entr(ies)",
-            file=sys.stderr,
-        )
+        print(f"FRAGMENT CHECK FAILED: {len(wrong)} wrong, {len(missing)} missing of {checked} entr(ies)")
         sys.exit(1)
 
-    print(f"fragment check: all {checked} entries present with the requested value")
+    print(f"FRAGMENT CHECK OK: all {checked} entries present with the requested value")
 
 
 if __name__ == "__main__":
