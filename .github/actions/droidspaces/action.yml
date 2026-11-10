@@ -84,6 +84,27 @@ runs:
       run: |
         python3 "${{ github.workspace }}/.github/scripts/binder_ipc_ns_exports.py" "$PWD"
 
+    - name: Apply the 6.18 SysV task-table port
+      # CONFIG_SYSVIPC adds two members to task_struct, and any change to that member
+      # list moves 6,329 of 9,741 modver CRCs - even when the bytes land at identical
+      # offsets. DroidSpaces relocate the members instead (reserve slots below 6.12, a
+      # 28-byte hole from 6.12 up); 6.18 has neither, so this port deletes the members
+      # outright and keeps the state in an xarray keyed by task pointer.
+      # Measured on android17-6.18: 0 of 9,741 symbols differ from stock.
+      if: inputs.version == 'android17-6.18'
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+        P="${{ github.workspace }}/.github/patches/sysvipc-618/001-task-table.patch"
+        if grep -q 'sysv_task_state_get' ipc/sem.c; then
+          echo "task-table port already applied"
+          exit 0
+        fi
+        git apply -v "$P" || { echo "ERROR: the 6.18 SysV port did not apply" >&2; exit 1; }
+        grep -q 'sysv_task_state_get' ipc/sem.c || { echo "ERROR: port applied but sem.c unchanged" >&2; exit 1; }
+        echo "task-table port applied"
+
     - name: Append the DS configs to the wild fragment
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common
@@ -92,6 +113,4 @@ runs:
         A="${{ github.workspace }}/.github/actions/droidspaces"
         S="${{ github.workspace }}/.github/scripts/append_fragment.py"
         python3 "$S" "$A/droidspaces_defconfig.fragment" --dest wild.fragment --label droidspaces
-        if [ "${{ inputs.version }}" != "android17-6.18" ]; then
-          python3 "$S" "$A/droidspaces_ipc.fragment" --dest wild.fragment --label droidspaces-ipc
-        fi
+        python3 "$S" "$A/droidspaces_ipc.fragment" --dest wild.fragment --label droidspaces-ipc
