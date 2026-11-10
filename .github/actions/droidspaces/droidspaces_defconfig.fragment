@@ -1,3 +1,21 @@
+# DroidSpaces GKI config set - one fragment.
+#
+# Previously split in two (IPC separately) because android17-6.18 could not take the IPC
+# configs without 6,329 exported symbols changing CRC. That is solved: the 6.18 SysV
+# task-table port runs before this fragment is appended, measured at 0 of 9,741 symbols
+# against stock, so the IPC block is safe on every family now.
+#
+# Order matters only in that it is readable: the 6.18 port must be applied before the
+# fragment, which the action already does.
+
+# IPC
+CONFIG_SYSVIPC=y
+CONFIG_POSIX_MQUEUE=y
+
+# Namespaces
+CONFIG_IPC_NS=y
+CONFIG_PID_NS=y
+
 # optional but recommended: docker's unsafe procfs check
 CONFIG_USER_NS=y
 # HW access

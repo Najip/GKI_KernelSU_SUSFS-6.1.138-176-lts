@@ -113,4 +113,3 @@ runs:
         A="${{ github.workspace }}/.github/actions/droidspaces"
         S="${{ github.workspace }}/.github/scripts/append_fragment.py"
         python3 "$S" "$A/droidspaces_defconfig.fragment" --dest wild_defconfig.fragment --label droidspaces
-        python3 "$S" "$A/droidspaces_ipc_defconfig.fragment" --dest wild_defconfig.fragment --label droidspaces-ipc
