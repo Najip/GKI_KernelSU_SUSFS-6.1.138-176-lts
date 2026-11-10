@@ -1,6 +1,6 @@
 name: 'Add kernel configs'
 description: >-
-  Append config entries to the shared wild fragment (common/wild.fragment), which the
+  Append config entries to the shared wild fragment (common/wild_defconfig.fragment), which the
   build applies as a defconfig fragment. Replaces set-kernel-config: entries no longer
   edit gki_defconfig, they accumulate in one place and the appending step is named.
 
@@ -26,4 +26,4 @@ runs:
         set -euo pipefail
         printf '%s\n' "$CONFIG_LIST" \
           | python3 "${{ github.workspace }}/.github/scripts/append_fragment.py" - \
-              --dest wild.fragment --label "$LABEL"
+              --dest wild_defconfig.fragment --label "$LABEL"

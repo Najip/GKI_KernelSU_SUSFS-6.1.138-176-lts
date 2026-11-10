@@ -225,4 +225,4 @@ runs:
         fi
         printf 'CONFIG_FUSE_BPF=y\n' \
           | python3 "${{ github.workspace }}/.github/scripts/append_fragment.py" - \
-              --dest wild.fragment --label fuse-bpf
+              --dest wild_defconfig.fragment --label fuse-bpf

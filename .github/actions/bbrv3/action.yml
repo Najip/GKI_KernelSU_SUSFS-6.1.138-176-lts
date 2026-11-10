@@ -94,7 +94,7 @@ runs:
     - name: Enable BBRv3 Kernel Config
       # Only when the patch actually declared the symbol. Kleaf's fragment check
       # rejects a symbol the tree does not have -
-      #   ERROR: CONFIG_TCP_CONG_BBR3: actual '', expected 'y' from wild.fragment
+      #   ERROR: CONFIG_TCP_CONG_BBR3: actual '', expected 'y' from wild_defconfig.fragment
       # - so adding it unconditionally turns a patch that did not apply into a
       # build failure in a place that says nothing about the patch.
       shell: bash
@@ -107,4 +107,4 @@ runs:
         fi
         printf 'CONFIG_TCP_CONG_BBR3=y\n' \
           | python3 "${{ github.workspace }}/.github/scripts/append_fragment.py" - \
-              --dest wild.fragment --label bbrv3
+              --dest wild_defconfig.fragment --label bbrv3

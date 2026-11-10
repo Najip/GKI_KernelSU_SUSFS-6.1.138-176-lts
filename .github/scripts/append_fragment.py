@@ -2,7 +2,7 @@
 """Append a config fragment to the shared wild fragment, one entry per symbol.
 
 Every step that wants to contribute kernel options appends to the same file
-(common/wild.fragment by default), which the build then applies as a defconfig
+(common/wild_defconfig.fragment by default), which the build then applies as a defconfig
 fragment. Doing it through this script instead of `cat >>` means:
 
   * only real config lines land - comments and blank lines are dropped, and anything
@@ -13,7 +13,7 @@ fragment. Doing it through this script instead of `cat >>` means:
     back to the steps that put them there
 
 Usage:
-    append_fragment.py <source-fragment> [--dest common/wild.fragment] [--label NAME]
+    append_fragment.py <source-fragment> [--dest common/wild_defconfig.fragment] [--label NAME]
 """
 
 import argparse
@@ -41,7 +41,7 @@ def read_symbols(path: str) -> dict[str, str]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", help="fragment to append, or - for stdin")
-    parser.add_argument("--dest", default="common/wild.fragment")
+    parser.add_argument("--dest", default="common/wild_defconfig.fragment")
     parser.add_argument("--label", default=None, help="name shown in the log")
     args = parser.parse_args()
 
