@@ -91,25 +91,26 @@ runs:
         SKIPPED=0
         FAILED=()
 
+        # Always patch -p1. git apply is stricter about whitespace than the trees these
+        # patches were cut against, so trying it first made the outcome depend on which
+        # tool happened to accept the hunk - and the "applied" label on which path won.
+        # One tool, one behaviour, same report every run.
         for p in "${PATCHES[@]}"; do
           name="$(basename "$p")"
-          # git apply keeps the tree clean and is what these patches were exported
-          # for; patch -p1 is the fallback for a hunk git refuses on whitespace.
-          if git apply --check "$p" 2>/dev/null; then
-            git apply "$p"
+          if patch -p1 --forward --dry-run -f < "$p" >/dev/null 2>&1; then
+            patch -p1 --forward -f < "$p" >/dev/null
             APPLIED=$((APPLIED + 1))
-            echo "  applied (git apply): $name"
+            echo "  applied: $name"
           elif python3 "$CHECK" "$p"; then
             SKIPPED=$((SKIPPED + 1))
             echo "  skipped (already in this tree): $name"
-          elif patch -p1 --forward --dry-run -f < "$p" >/dev/null 2>&1; then
-            patch -p1 --forward -f < "$p" >/dev/null
-            APPLIED=$((APPLIED + 1))
-            echo "  applied (patch -p1): $name"
           else
             FAILED+=("$name")
             echo "  NOT APPLIED: $name"
-            git apply --check -v "$p" 2>&1 | head -6 | sed 's/^/    /' || true
+            # --forward dry-run again, capturing why: FAILED hunks, line numbers,
+            # or "Reversed (or previously applied)" for a patch already in the tree.
+            patch -p1 --forward --dry-run -f < "$p" 2>&1 \
+              | grep -E 'FAILED|Hunk|Reversed|Skipping' | head -6 | sed 's/^/    /' || true
           fi
         done
 
