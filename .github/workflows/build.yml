@@ -203,32 +203,32 @@ jobs:
         uses: ./.github/actions/add-configs
         with:
           config_list: |
-            CONFIG_KSU_SUSFS=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SUS_PATH=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SUS_MOUNT=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SUS_KSTAT=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SPOOF_UNAME=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_ENABLE_LOG=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_OPEN_REDIRECT=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SUS_MAP=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
+            CONFIG_KSU_SUSFS=n
+            CONFIG_KSU_SUSFS_SUS_PATH=n
+            CONFIG_KSU_SUSFS_SUS_MOUNT=n
+            CONFIG_KSU_SUSFS_SUS_KSTAT=n
+            CONFIG_KSU_SUSFS_SPOOF_UNAME=n
+            CONFIG_KSU_SUSFS_ENABLE_LOG=n
+            CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=n
+            CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=n
+            CONFIG_KSU_SUSFS_OPEN_REDIRECT=n
+            CONFIG_KSU_SUSFS_SUS_MAP=n
 
       - name: Disable SUSFS for SukiSU-Ultra without SUSFS feature
         if: inputs.root_flavor == 'sukisu-ultra' && !contains(inputs.feature_set, 'SUSFS')
         uses: ./.github/actions/add-configs
         with:
           config_list: |
-            CONFIG_KSU_SUSFS=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SUS_PATH=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SUS_MOUNT=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SUS_KSTAT=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SPOOF_UNAME=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_ENABLE_LOG=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_OPEN_REDIRECT=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
-            CONFIG_KSU_SUSFS_SUS_MAP=n # nocheck: SUSFS symbols do not exist on flavours built without SUSFS
+            CONFIG_KSU_SUSFS=n
+            CONFIG_KSU_SUSFS_SUS_PATH=n
+            CONFIG_KSU_SUSFS_SUS_MOUNT=n
+            CONFIG_KSU_SUSFS_SUS_KSTAT=n
+            CONFIG_KSU_SUSFS_SPOOF_UNAME=n
+            CONFIG_KSU_SUSFS_ENABLE_LOG=n
+            CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=n
+            CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=n
+            CONFIG_KSU_SUSFS_OPEN_REDIRECT=n
+            CONFIG_KSU_SUSFS_SUS_MAP=n
 
       - name: Single manager for BakaSU (multi-manager off)
         # BakaSU's Kconfig ships CONFIG_KSU_MULTI_MANAGER_SUPPORT=y, which
@@ -375,13 +375,19 @@ jobs:
           sublevel: ${{ steps.extract.outputs.sublevel }}
           variant: ${{ inputs.variant }}
 
-      - name: Enable BPF Stack (BTF + eBPF + FUSE-BPF)
-        if: contains(inputs.feature_set, 'BPF')
-        uses: ./.github/actions/btf
-        with:
-          version: ${{ inputs.version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          sublevel: ${{ steps.extract.outputs.sublevel }}
+      # DISABLED: the BPF stack (BTF + eBPF + FUSE-BPF) is off until there is a
+      # concrete need for it. Most of it is already in stock GKI (BPF_SYSCALL,
+      # DEBUG_INFO_BTF, FUSE_FS are =y on 5.15+), so the action was mainly adding
+      # BPF_EVENTS/kprobe/uprobe events and FUSE_BPF - tracing plumbing and an
+      # experimental FUSE-over-eBPF path that nothing here uses - at the cost of build
+      # time and extra config surface. If you require it, open an issue.
+      # - name: Enable BPF Stack (BTF + eBPF + FUSE-BPF)
+      #   if: contains(inputs.feature_set, 'BPF')
+      #   uses: ./.github/actions/btf
+      #   with:
+      #     version: ${{ inputs.version }}
+      #     kernel_version: ${{ inputs.kernel_version }}
+      #     sublevel: ${{ steps.extract.outputs.sublevel }}
 
       - name: Apply Device-Specific Patches
         uses: ./.github/actions/apply-device-patches

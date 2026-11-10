@@ -62,7 +62,10 @@ def main() -> None:
         for symbol, expected, raw in parse_fragment(fragment):
             checked += 1
             if symbol not in actual:
-                missing.append(f"{symbol} ({raw})")
+                # =n is satisfied by absence: a symbol the tree never declares cannot
+                # appear in .config, and "not there" is the off state.
+                if expected != "n":
+                    missing.append(f"{symbol} ({raw})")
             elif actual[symbol] != expected:
                 wrong.append(f"{symbol}: wanted {expected}, .config has {actual[symbol]}")
 
@@ -71,6 +74,12 @@ def main() -> None:
         for symbol, expected, _raw in parse_fragment(fragment):
             got = actual.get(symbol)
             if got is None:
+                # A request for =n is satisfied by the symbol being absent: an
+                # undeclared symbol cannot appear in .config at all, and that is the
+                # off state. Only a request for anything else is a miss.
+                if expected == "n":
+                    print(f"  ok       {symbol}=n (absent)")
+                    continue
                 print(f"  MISSING  {symbol}: wanted {expected}, not in .config")
             elif got != expected:
                 print(f"  WRONG    {symbol}: wanted {expected}, .config has {got}")
