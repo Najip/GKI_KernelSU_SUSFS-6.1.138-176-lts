@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 PRIORITY = ['test_release_notes', 'use_nomount', 'use_ds']
-DEFAULTS = {'kernel_build_version': '6.1.x-android14', 'os_patch_level': '"176"', 'brand_name': 'Najip', 'keep_kmi': 'true', 'commit_mode': 'latest', 'root_flavor': 'KernelSU', 'use_ds': 'false'}
+DEFAULTS = {'kernel_build_version': '6.1.x-android14', 'os_patch_level': '"176"', 'brand_name': 'Najip', 'keep_kmi': 'true', 'commit_mode': 'latest', 'root_flavor': 'KernelSU', 'use_ds': 'false', 'use_nomount': 'false'}
 
 def transform(text):
     text = re.sub(r'^name:.*$', 'name: Build Kernels 6.1.x Keep KMI, KernelSU, No Droidspaces', text, count=1, flags=re.M)
