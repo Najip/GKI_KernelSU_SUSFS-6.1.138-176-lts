@@ -117,3 +117,23 @@ runs:
         fi
 
         echo "ABI gate: OK - $compared symbols compared against stock, 0 differ"
+
+    - name: Assert the KMI symbol list is unchanged
+      # Kleaf already computes this inside the build (kernel_aarch64_kmi_symbol_list_
+      # violations); this step only makes the verdict visible and names it. It is a
+      # report on that check, not a second implementation of it.
+      shell: bash
+      run: |
+        set +e
+        V=$(find -L . "${OUT_DIR:-/home/runner/out}" -maxdepth 8 \
+              -name 'kernel_aarch64_kmi_symbol_list_violations_checked' -type f 2>/dev/null | head -n1)
+        if [ -z "${V:-}" ]; then
+          echo "::warning title=KMI::no violation-check output in this build - skipped"
+          exit 0
+        fi
+        if [ -s "$V" ]; then
+          echo "::error title=KMI::the exported symbol list moved away from stock:"
+          cat "$V"
+          exit 1
+        fi
+        echo "KMI: symbol list unchanged (violations file empty)"
