@@ -5,7 +5,7 @@ runs:
   using: "composite"
   steps:
     - name: Enable SUSFS Kernel Configs
-      uses: ./.github/actions/add-configs
+      uses: ./.github/actions/set-kernel-config
       with:
         config_list: |
           CONFIG_KSU_SUSFS=y

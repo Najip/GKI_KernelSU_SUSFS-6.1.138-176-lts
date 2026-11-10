@@ -57,7 +57,7 @@ runs:
         patch -p1 < ${{ github.workspace }}/kernel_patches/common/ntsync/ntsync_base.patch
 
     - name: Enable NTSync
-      uses: ./.github/actions/add-configs
+      uses: ./.github/actions/set-kernel-config
       with:
         config_list: |
           CONFIG_NTSYNC=y

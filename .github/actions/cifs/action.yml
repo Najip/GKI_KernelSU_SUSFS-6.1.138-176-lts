@@ -9,7 +9,7 @@ runs:
   using: "composite"
   steps:
     - name: Enable CIFS Configs
-      uses: ./.github/actions/add-configs
+      uses: ./.github/actions/set-kernel-config
       with:
         config_list: |
           CONFIG_CIFS=y
