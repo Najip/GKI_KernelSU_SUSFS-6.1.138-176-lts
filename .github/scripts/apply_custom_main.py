@@ -23,6 +23,7 @@ DEFAULTS = {
     "commit_mode": "latest",
     "root_flavor": "KernelSU",
     "use_ds": "false",
+    "use_nomount": "false",
 }
 
 PINNED_KSU_INPUT = """      pinned_ksu_commit:
