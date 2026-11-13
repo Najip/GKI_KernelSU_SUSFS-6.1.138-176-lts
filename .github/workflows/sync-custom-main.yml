@@ -1,0 +1,235 @@
+name: Sync Custom Main Workflow
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_sha:
+        description: 'Optional upstream commit SHA to force-sync to (empty = normal sync)'
+        required: false
+        type: string
+        default: ''
+      revert_sha:
+        description: 'Optional local commit SHA to restore (empty = normal sync)'
+        required: false
+        type: string
+        default: ''
+      force_upstream_tip:
+        description: 'Force reset to the upstream tip even when a clean merge is possible'
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: custom-main-watcher-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: github.repository == 'Najip/GKI_KernelSU_SUSFS-6.1.138-176-lts' && (github.ref_name == 'main' || github.ref_name == 'feat/usb-arsenal')
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(format('["{0}"]', github.ref_name)) }}
+    concurrency:
+      group: custom-main-sync-${{ matrix.branch }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
+      - name: Resolve sync target
+        id: target
+        shell: bash
+        env:
+          BRANCH: ${{ matrix.branch }}
+          UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+          REVERT_SHA: ${{ inputs.revert_sha }}
+          FORCE_TIP: ${{ inputs.force_upstream_tip }}
+        run: |
+          set -euo pipefail
+          if [ -n "$UPSTREAM_SHA" ] && [ -n "$REVERT_SHA" ]; then
+            echo '::error::Set either upstream_sha or revert_sha, not both.' >&2
+            exit 1
+          fi
+          for sha in "$UPSTREAM_SHA" "$REVERT_SHA"; do
+            [ -z "$sha" ] && continue
+            [[ "$sha" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "::error::$sha is not a full 40-character commit SHA." >&2; exit 1; }
+          done
+          mode=auto
+          if [ -n "$UPSTREAM_SHA" ]; then
+            mode='upstream-sha'
+          elif [ -n "$REVERT_SHA" ]; then
+            mode='revert-sha'
+          elif [ "$FORCE_TIP" = "true" ]; then
+            mode='upstream-tip'
+          fi
+          git fetch origin "refs/heads/$BRANCH"
+          original=$(git rev-parse FETCH_HEAD)
+          test "$(git rev-parse HEAD)" = "$original"
+          echo "original=$original" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          if [ "$mode" != revert-sha ]; then
+            git fetch https://github.com/WildKernels/GKI_KernelSU_SUSFS.git "refs/heads/$BRANCH"
+            upstream=$(git rev-parse FETCH_HEAD)
+            echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$mode" = auto ]; then
+            if git merge-base --is-ancestor "$upstream" "$original"; then
+              echo "needed=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "needed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.target.outputs.needed == 'true'
+        with:
+          python-version: '3.11'
+      - name: Install validators
+        if: steps.target.outputs.needed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install 'PyYAML==6.0.2'
+          GOPROXY=https://proxy.golang.org go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
+          sudo install -m 0755 "$(go env GOPATH)/bin/actionlint" /usr/local/bin/actionlint
+      - name: Sync, revert, or force-sync
+        if: steps.target.outputs.needed == 'true'
+        shell: bash
+        env:
+          BRANCH: ${{ matrix.branch }}
+          SYNC_OPERATION: ${{ steps.target.outputs.mode }}
+          ORIGINAL: ${{ steps.target.outputs.original }}
+          UPSTREAM: ${{ steps.target.outputs.upstream }}
+          UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+          REVERT_SHA: ${{ inputs.revert_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          saved=$(mktemp -d)
+          trap 'rm -rf "$saved"' EXIT
+          tools=(.github/scripts/apply_custom_main.py .github/scripts/safe_custom_main.py .github/workflows/sync-custom-main.yml)
+          if [ -f .github/scripts/normalize_removed_inputs.py ]; then tools+=(.github/scripts/normalize_removed_inputs.py); fi
+          tar -cf "$saved/tools.tar" "${tools[@]}"
+          custom=.github/workflows/main-6.1.x-kernelsupin-nods.yml
+          for path in "$custom" "$custom.bak"; do
+            if [ -f "$path" ]; then cp "$path" "$saved/$(basename "$path")"; fi
+          done
+          mode="$SYNC_OPERATION"
+          target="$UPSTREAM"
+          push_mode=force
+          case "$mode" in
+            upstream-sha)
+              target="$UPSTREAM_SHA"
+              git cat-file -e "${UPSTREAM_SHA}^{commit}" 2>/dev/null || {
+                echo "::error::Upstream SHA ${UPSTREAM_SHA} is not reachable from the fetched upstream branch." >&2
+                exit 1
+              }
+              git reset --hard "$UPSTREAM_SHA"
+              git clean -fd
+              ;;
+            revert-sha)
+              target="$REVERT_SHA"
+              git cat-file -e "${REVERT_SHA}^{commit}" 2>/dev/null || {
+                echo "::error::Revert SHA ${REVERT_SHA} is not present in this branch history." >&2
+                exit 1
+              }
+              git reset --hard "$REVERT_SHA"
+              git clean -fd
+              ;;
+            upstream-tip)
+              git reset --hard "$UPSTREAM"
+              git clean -fd
+              ;;
+            auto)
+              if git merge --no-edit "$UPSTREAM"; then
+                push_mode=normal
+              else
+                test -n "$(git ls-files -u)" || { echo '::error::Merge failed without conflicts; refusing reset'; exit 1; }
+                git merge --abort
+                mode='conflict-reset'
+                git reset --hard "$UPSTREAM"
+                git clean -fd
+              fi
+              ;;
+          esac
+          tar -xf "$saved/tools.tar"
+          for path in "$custom" "$custom.bak"; do
+            if [ -f "$saved/$(basename "$path")" ]; then cp "$saved/$(basename "$path")" "$path"; fi
+          done
+          python3 - <<'PY'
+          import hashlib, inspect, os, re, runpy, subprocess, tempfile
+          from pathlib import Path
+          import yaml
+          source = Path('.github/workflows/main.yml')
+          custom = Path('.github/workflows/main-6.1.x-kernelsupin-nods.yml')
+          backup = Path(str(custom) + '.bak')
+          state = Path('.github/.custom-main-sync.sha')
+          paths = [source, Path('.github/workflows/sync-custom-main.yml'), *sorted(Path('.github/scripts').glob('*custom_main.py'))]
+          fingerprint = hashlib.sha256(b''.join(str(p).encode() + b'\0' + p.read_bytes() for p in paths)).hexdigest()
+          if custom.exists() and state.exists() and state.read_text().strip() == fingerprint:
+              raise SystemExit(0)
+          fd, name = tempfile.mkstemp(prefix='custom-main-candidate-', suffix='.yml', dir=custom.parent)
+          os.close(fd)
+          candidate = Path(name)
+          try:
+              rules = runpy.run_path('.github/scripts/apply_custom_main.py')
+              if 'transform' in rules:
+                  candidate.write_text(rules['transform'](source.read_text()))
+              else:
+                  safe = runpy.run_path('.github/scripts/safe_custom_main.py')
+                  if len(inspect.signature(safe['main']).parameters) != 2:
+                      raise ValueError('Unsupported generator interface')
+                  safe['main'](str(source), str(candidate))
+              text = candidate.read_text()
+              root = dict((k.value, v) for k, v in yaml.compose(text).value)
+              events = root['on']
+              dispatch = next(v for k, v in events.value if k.value == 'workflow_dispatch')
+              lines = text.splitlines(keepends=True)
+              start = events.start_mark.line
+              end = events.end_mark.line
+              stop = dispatch.end_mark.line
+              text = ''.join(lines[:start]) + ''.join(lines[next(k.start_mark.line for k, v in events.value if k.value == 'workflow_dispatch'):stop]) + '\n' + ''.join(lines[end:])
+              original_inputs = dict((k.value, v) for k, v in next(v for k, v in dict((k.value,v) for k,v in yaml.compose(source.read_text()).value)['on'].value if k.value == 'workflow_dispatch').value)['inputs']
+              generated_root = dict((k.value, v) for k, v in yaml.compose(text).value)
+              generated_dispatch = next(v for k, v in generated_root['on'].value if k.value == 'workflow_dispatch')
+              inputs = dict((k.value,v) for k,v in generated_dispatch.value)['inputs']
+              names = {k.value for k,v in inputs.value}
+              if len(names) > 25:
+                  raise ValueError('More than 25 dispatch inputs')
+              for key in ('test_release_notes', 'use_nomount', 'use_ds'):
+                  if key not in names and any(k.value == key for k,v in original_inputs.value):
+                      text = re.sub(r'\binputs\.' + key + r'\b', 'false', text)
+              candidate.write_text(text)
+              subprocess.run(['actionlint', str(candidate)], check=True)
+              if not custom.exists() or custom.read_bytes() != candidate.read_bytes():
+                  if custom.exists():
+                      old = custom.read_bytes()
+                      backup.unlink(missing_ok=True)
+                      backup.write_bytes(old)
+                  os.replace(candidate, custom)
+              state.write_text(fingerprint + '\n')
+              for p in (custom, backup, state):
+                  if p.exists():
+                      subprocess.run(['git', 'add', str(p)], check=True)
+          finally:
+              candidate.unlink(missing_ok=True)
+          PY
+          actionlint .github/workflows/sync-custom-main.yml
+          git add -- "${tools[@]}"
+          if ! git diff --cached --quiet; then git commit -m "chore: custom main ${mode} ${target:0:12}"; fi
+          if [ "$(git rev-parse HEAD)" = "$ORIGINAL" ]; then exit 0; fi
+          backup="backup/${BRANCH//\//-}-before-sync-${RUN_ID}-${RUN_ATTEMPT}"
+          git push origin "$ORIGINAL:refs/heads/$backup"
+          if [ "$push_mode" = normal ]; then
+            test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$ORIGINAL"
+            git push origin "HEAD:refs/heads/$BRANCH"
+          else
+            git push --force-with-lease="refs/heads/$BRANCH:$ORIGINAL" origin "HEAD:refs/heads/$BRANCH"
+          fi
+          printf 'Branch: %s\nMode: %s\nTarget: %s\nBackup: %s\n' "$BRANCH" "$mode" "$target" "$backup" >> "$GITHUB_STEP_SUMMARY"
