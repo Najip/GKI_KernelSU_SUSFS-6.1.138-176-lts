@@ -180,6 +180,37 @@ jobs:
       feature_set: ${{ steps.features.outputs.feature_set }}
       manager_list: ${{ steps.manager.outputs.manager_list }}
     steps:
+      - name: Check and install Ubuntu self-hosted dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
       - uses: actions/checkout@v7
 
       - name: Validate page size selection
@@ -596,6 +627,37 @@ jobs:
     outputs:
       apk_list: ${{ steps.scan.outputs.apk_list }}
     steps:
+      - name: Check and install Ubuntu self-hosted dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
       - uses: actions/checkout@v7
 
       - name: Download and scan all manager APKs
@@ -620,6 +682,37 @@ jobs:
       matrix:
         item: ${{ fromJson(needs.list-manager-apks.outputs.apk_list) }}
     steps:
+      - name: Check and install Ubuntu self-hosted dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
       - uses: actions/checkout@v7
 
       - name: Download manager cross-blob
@@ -648,6 +741,37 @@ jobs:
       NOMOUNT_WANTED: ${{ inputs.use_nomount || (github.event_name == 'schedule' && true) || false }}
     runs-on: self-hosted
     steps:
+      - name: Check and install Ubuntu self-hosted dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
       - uses: actions/checkout@v7
         if: env.NOMOUNT_WANTED == 'true'
 
@@ -988,6 +1112,37 @@ jobs:
       TG_API_ID: ${{ secrets.TELEGRAM_API_ID }}
       TG_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
     steps:
+      - name: Check and install Ubuntu self-hosted dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
       - uses: actions/checkout@v7
       - name: Start local Telegram Bot API server (rich messages)
         if: ${{ env.TG_API_ID != '' && env.TG_API_HASH != '' }}
@@ -1305,6 +1460,37 @@ jobs:
       - build-android17-6-18
 
     steps:
+      - name: Check and install Ubuntu self-hosted dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
       - name: Download Misc Artifacts
         uses: actions/download-artifact@v7
         with:
@@ -1410,6 +1596,37 @@ jobs:
     outputs:
       new_tag: ${{ steps.tag.outputs.new_tag }}
     steps:
+      - name: Check and install Ubuntu self-hosted dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
       - name: Validate Selected Builds
         run: |
           set -euo pipefail
@@ -1827,6 +2044,37 @@ jobs:
     needs: [resolve-sources, build-android12-5-10, build-android13-5-10, build-android13-5-15, build-android14-5-15, build-android14-6-1, build-android15-6-6, build-android16-6-12, build-android17-6-18]
     runs-on: self-hosted
     steps:
+      - name: Check and install Ubuntu self-hosted dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
       - uses: actions/checkout@v7
       - name: Render release notes preview (always)
         # Renderer lives in .github/scripts (extracted out of this workflow).
@@ -1904,6 +2152,37 @@ jobs:
     needs: [notes-preview, resolve-sources]
     runs-on: self-hosted
     steps:
+      - name: Check and install Ubuntu self-hosted dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
       - uses: actions/checkout@v7
 
       - name: Download release notes preview
