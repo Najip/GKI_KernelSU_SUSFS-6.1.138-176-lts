@@ -115,6 +115,13 @@ jobs:
           trap 'rm -rf "$saved"' EXIT
           tools=(.github/scripts/apply_custom_main.py .github/scripts/safe_custom_main.py .github/workflows/sync-custom-main.yml)
           if [ -f .github/scripts/normalize_removed_inputs.py ]; then tools+=(.github/scripts/normalize_removed_inputs.py); fi
+          for path in .github/scripts/*cache*.py .github/scripts/*cache*.sh; do
+            if [ -f "$path" ] && grep -qE 'GKI_SOURCE_CACHE|SOURCE_CACHE_TARGET' "$path"; then tools+=("$path"); fi
+          done
+          for action in download-kernel setup-build-environment root-setup nomount nomount-metamodule susfs-setup bbg usb-arsenal droidspaces list-manager-apks; do
+            path=".github/actions/$action/action.yml"
+            if [ -f "$path" ] && grep -qE 'GKI_SOURCE_CACHE|SOURCE_CACHE_TARGET' "$path"; then tools+=("$path"); fi
+          done
           tar -cf "$saved/tools.tar" "${tools[@]}"
           custom=.github/workflows/main-6.1.x-kernelsupin-nods.yml
           custom_sh=.github/workflows/main-6.1.x-kernelsupin-nods-selfhosted.yml
