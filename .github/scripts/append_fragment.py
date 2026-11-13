@@ -22,6 +22,7 @@ import re
 import sys
 
 SYMBOL = re.compile(r"^(?:# )?(CONFIG_[A-Za-z0-9_]+)(?:=.*| is not set)$")
+KCONFIG_ENTRY = re.compile(r"^[ \t]*(?:menu)?config[ \t]+([A-Za-z0-9_]+)")
 
 NOT_SET = re.compile(r"^(?:# CONFIG_[A-Za-z0-9_]+ is not set|CONFIG_[A-Za-z0-9_]+=n)$")
 
@@ -88,10 +89,12 @@ def declared_symbols(root: str = ".") -> set[str] | None:
             try:
                 with open(os.path.join(dirpath, name), encoding="utf-8", errors="replace") as fh:
                     for line in fh:
-                        if line.startswith("config "):
-                            names.add("CONFIG_" + line.split()[1].strip())
-                        elif line.startswith("menuconfig "):
-                            names.add("CONFIG_" + line.split()[1].strip())
+                        # Entries inside a choice are indented with a tab, e.g.
+                        # "\tconfig DEFAULT_BBR" in net/ipv4/Kconfig, so the
+                        # keyword cannot be anchored to column 0.
+                        match = KCONFIG_ENTRY.match(line)
+                        if match:
+                            names.add("CONFIG_" + match.group(1))
             except OSError:
                 continue
     return names if seen_any else None
