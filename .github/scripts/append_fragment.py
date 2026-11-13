@@ -22,8 +22,48 @@ import re
 import sys
 
 SYMBOL = re.compile(r"^(?:# )?(CONFIG_[A-Za-z0-9_]+)(?:=.*| is not set)$")
+KCONFIG_ENTRY = re.compile(r"^[ \t]*(?:menu)?config[ \t]+([A-Za-z0-9_]+)")
 
 NOT_SET = re.compile(r"^(?:# CONFIG_[A-Za-z0-9_]+ is not set|CONFIG_[A-Za-z0-9_]+=n)$")
+
+
+# Root implementations live either symlinked into the tree (drivers/kernelsu)
+# or beside it as their own checkout (kernel/BakaSU, kernel/KernelSU, ...).
+KSU_CHECKOUTS = (
+    "KernelSU",
+    "KernelSU-Next",
+    "BakaSU",
+    "SukiSU-Ultra",
+    "KowSU",
+    "FinaSU",
+)
+
+
+def scan_roots() -> list[str]:
+    roots = ["."]
+    for name in KSU_CHECKOUTS:
+        for candidate in (f"../{name}", f"./{name}"):
+            if os.path.isdir(candidate):
+                roots.append(candidate)
+                break
+    return roots
+
+
+def _walk_all(root: str, visited: set[str]):
+    """os.walk over one or more roots (colon-free list in root), link-safe."""
+    for base in root.split(os.pathsep):
+        if not os.path.isdir(base):
+            continue
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=True):
+            real = os.path.realpath(dirpath)
+            if real in visited:
+                dirnames[:] = []
+                continue
+            visited.add(real)
+            dirnames[:] = [
+                d for d in dirnames if d not in {"out", ".git", "bazel-out", "bazel-bin"}
+            ]
+            yield dirpath, dirnames, filenames
 
 
 def declared_symbols(root: str = ".") -> set[str] | None:
@@ -36,11 +76,12 @@ def declared_symbols(root: str = ".") -> set[str] | None:
     """
     names: set[str] = set()
     seen_any = False
-    for dirpath, dirnames, filenames in os.walk(root):
-        # Skip the build output tree: it holds copies, not sources.
-        dirnames[:] = [
-            d for d in dirnames if d not in {"out", ".git", "bazel-out", "bazel-bin"}
-        ]
+    visited: set[str] = set()
+    # followlinks: the root implementation (KernelSU / BakaSU / ...) is symlinked
+    # into the tree, so its Kconfig lives outside this directory. Without this the
+    # scan misses CONFIG_KSU, every CONFIG_KSU_SUSFS_* and CONFIG_BBG, and the
+    # prune silently strips them. visited guards against link cycles.
+    for dirpath, _dirnames, filenames in _walk_all(root, visited):
         for name in filenames:
             if not name.startswith("Kconfig"):
                 continue
@@ -48,10 +89,12 @@ def declared_symbols(root: str = ".") -> set[str] | None:
             try:
                 with open(os.path.join(dirpath, name), encoding="utf-8", errors="replace") as fh:
                     for line in fh:
-                        if line.startswith("config "):
-                            names.add("CONFIG_" + line.split()[1].strip())
-                        elif line.startswith("menuconfig "):
-                            names.add("CONFIG_" + line.split()[1].strip())
+                        # Entries inside a choice are indented with a tab, e.g.
+                        # "\tconfig DEFAULT_BBR" in net/ipv4/Kconfig, so the
+                        # keyword cannot be anchored to column 0.
+                        match = KCONFIG_ENTRY.match(line)
+                        if match:
+                            names.add("CONFIG_" + match.group(1))
             except OSError:
                 continue
     return names if seen_any else None
@@ -91,10 +134,41 @@ def read_symbols(path: str) -> dict[str, str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("source", help="fragment to append, or - for stdin")
+    parser.add_argument("source", nargs="?", help="fragment to append, or - for stdin")
     parser.add_argument("--dest", default="common/wild_defconfig.fragment")
     parser.add_argument("--label", default=None, help="name shown in the log")
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="drop entries whose symbol the tree does not declare, then exit",
+    )
     args = parser.parse_args()
+
+    if args.prune:
+        # Run this once every patch has landed: a symbol a patch adds later is
+        # not declared yet when the entry is appended, so the check cannot live
+        # in the append path (it would drop CONFIG_DEFAULT_BBR and friends).
+        existing = read_symbols(args.dest)
+        declared = declared_symbols(os.pathsep.join(scan_roots()))
+        if declared is None:
+            print("WARNING: no Kconfig files found here - cannot check declarations")
+            return
+        kept = filter_undeclared(existing, declared, "prune")
+        # Tail entries can predate the normalisation above (or come from a file
+        # that was written by hand), so apply the same '=n' rewrite here.
+        for key, line in list(kept.items()):
+            if line.endswith("=n"):
+                kept[key] = f"# {key} is not set"
+        with open(args.dest, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(kept.values()) + "\n")
+        print(
+            f"prune -> {args.dest}: {len(existing) - len(kept)} undeclared dropped, "
+            f"{len(kept)} symbol(s) kept"
+        )
+        return
+
+    if not args.source:
+        sys.exit("ERROR: need a source fragment (or use --prune)")
 
     label = args.label or ("stdin" if args.source == "-" else os.path.basename(args.source))
     if args.source == "-":
@@ -136,22 +210,12 @@ def main() -> None:
                 symbols[key] = item
                 added += 1
 
-    dropped = 0
-    if os.environ.get("SKIP_DECLARED_CHECK") != "1":
-        declared = declared_symbols()
-        if declared is None:
-            print("WARNING: no Kconfig files found here - cannot check declarations, writing as-is")
-        else:
-            kept = filter_undeclared(symbols, declared, label)
-            dropped = len(symbols) - len(kept)
-            symbols = kept
-
     with open(args.dest, "w", encoding="utf-8") as fh:
         fh.write("\n".join(symbols.values()) + "\n")
 
     print(
         f"{label} -> {args.dest}: +{added} new, {overridden} overridden, "
-        f"{skipped} non-config line(s) skipped, {dropped} undeclared dropped, "
+        f"{skipped} non-config line(s) skipped, "
         f"{len(symbols)} symbol(s) total (was {before})"
     )
 
