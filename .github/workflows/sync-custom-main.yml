@@ -1,0 +1,367 @@
+name: Sync Custom Main Workflow
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_sha:
+        description: 'Optional upstream commit SHA to force-sync to (empty = normal sync)'
+        required: false
+        type: string
+        default: ''
+      revert_sha:
+        description: 'Optional local commit SHA to restore (empty = normal sync)'
+        required: false
+        type: string
+        default: ''
+      force_upstream_tip:
+        description: 'Force reset to the upstream tip even when a clean merge is possible'
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: custom-main-watcher-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: github.repository == 'Najip/GKI_KernelSU_SUSFS-6.1.138-176-lts' && (github.ref_name == 'main' || github.ref_name == 'feat/usb-arsenal')
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(format('["{0}"]', github.ref_name)) }}
+    concurrency:
+      group: custom-main-sync-${{ matrix.branch }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
+      - name: Resolve sync target
+        id: target
+        shell: bash
+        env:
+          BRANCH: ${{ matrix.branch }}
+          UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+          REVERT_SHA: ${{ inputs.revert_sha }}
+          FORCE_TIP: ${{ inputs.force_upstream_tip }}
+        run: |
+          set -euo pipefail
+          if [ -n "$UPSTREAM_SHA" ] && [ -n "$REVERT_SHA" ]; then
+            echo '::error::Set either upstream_sha or revert_sha, not both.' >&2
+            exit 1
+          fi
+          for sha in "$UPSTREAM_SHA" "$REVERT_SHA"; do
+            [ -z "$sha" ] && continue
+            [[ "$sha" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "::error::$sha is not a full 40-character commit SHA." >&2; exit 1; }
+          done
+          mode=auto
+          if [ -n "$UPSTREAM_SHA" ]; then
+            mode='upstream-sha'
+          elif [ -n "$REVERT_SHA" ]; then
+            mode='revert-sha'
+          elif [ "$FORCE_TIP" = "true" ]; then
+            mode='upstream-tip'
+          fi
+          git fetch origin "refs/heads/$BRANCH"
+          original=$(git rev-parse FETCH_HEAD)
+          test "$(git rev-parse HEAD)" = "$original"
+          echo "original=$original" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          if [ "$mode" != revert-sha ]; then
+            git fetch https://github.com/WildKernels/GKI_KernelSU_SUSFS.git "refs/heads/$BRANCH"
+            upstream=$(git rev-parse FETCH_HEAD)
+            echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$mode" = auto ]; then
+            if git merge-base --is-ancestor "$upstream" "$original"; then
+              echo "needed=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "needed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.target.outputs.needed == 'true'
+        with:
+          python-version: '3.11'
+      - name: Install validators
+        if: steps.target.outputs.needed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install 'PyYAML==6.0.2'
+          GOPROXY=https://proxy.golang.org go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
+          sudo install -m 0755 "$(go env GOPATH)/bin/actionlint" /usr/local/bin/actionlint
+      - name: Sync, revert, or force-sync
+        if: steps.target.outputs.needed == 'true'
+        shell: bash
+        env:
+          BRANCH: ${{ matrix.branch }}
+          SYNC_OPERATION: ${{ steps.target.outputs.mode }}
+          ORIGINAL: ${{ steps.target.outputs.original }}
+          UPSTREAM: ${{ steps.target.outputs.upstream }}
+          UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+          REVERT_SHA: ${{ inputs.revert_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          saved=$(mktemp -d)
+          trap 'rm -rf "$saved"' EXIT
+          tools=(.github/scripts/apply_custom_main.py .github/scripts/safe_custom_main.py .github/workflows/sync-custom-main.yml)
+          if [ -f .github/scripts/normalize_removed_inputs.py ]; then tools+=(.github/scripts/normalize_removed_inputs.py); fi
+          tar -cf "$saved/tools.tar" "${tools[@]}"
+          custom=.github/workflows/main-6.1.x-kernelsupin-nods.yml
+          custom_sh=.github/workflows/main-6.1.x-kernelsupin-nods-selfhosted.yml
+          for path in "$custom" "$custom.bak" "$custom_sh" "$custom_sh.bak"; do
+            if [ -f "$path" ]; then cp "$path" "$saved/$(basename "$path")"; fi
+          done
+          mode="$SYNC_OPERATION"
+          target="$UPSTREAM"
+          push_mode=force
+          case "$mode" in
+            upstream-sha)
+              target="$UPSTREAM_SHA"
+              git cat-file -e "${UPSTREAM_SHA}^{commit}" 2>/dev/null || {
+                echo "::error::Upstream SHA ${UPSTREAM_SHA} is not reachable from the fetched upstream branch." >&2
+                exit 1
+              }
+              git reset --hard "$UPSTREAM_SHA"
+              git clean -fd
+              ;;
+            revert-sha)
+              target="$REVERT_SHA"
+              git cat-file -e "${REVERT_SHA}^{commit}" 2>/dev/null || {
+                echo "::error::Revert SHA ${REVERT_SHA} is not present in this branch history." >&2
+                exit 1
+              }
+              git reset --hard "$REVERT_SHA"
+              git clean -fd
+              ;;
+            upstream-tip)
+              git reset --hard "$UPSTREAM"
+              git clean -fd
+              ;;
+            auto)
+              if git merge --no-edit "$UPSTREAM"; then
+                push_mode=normal
+              else
+                test -n "$(git ls-files -u)" || { echo '::error::Merge failed without conflicts; refusing reset'; exit 1; }
+                git merge --abort
+                mode='conflict-reset'
+                git reset --hard "$UPSTREAM"
+                git clean -fd
+              fi
+              ;;
+          esac
+          tar -xf "$saved/tools.tar"
+          for path in "$custom" "$custom.bak" "$custom_sh" "$custom_sh.bak"; do
+            if [ -f "$saved/$(basename "$path")" ]; then cp "$saved/$(basename "$path")" "$path"; fi
+          done
+          python3 - <<'PY'
+          import hashlib, inspect, os, re, runpy, subprocess, tempfile
+          from pathlib import Path
+          import yaml
+
+          wf = Path('.github/workflows')
+          source = wf / 'main.yml'
+          prepare_src = wf / 'prepare.yml'
+          build_src = wf / 'build.yml'
+          custom = wf / 'main-6.1.x-kernelsupin-nods.yml'
+          custom_sh = wf / 'main-6.1.x-kernelsupin-nods-selfhosted.yml'
+          prepare_sh = wf / 'prepare-selfhosted.yml'
+          build_sh = wf / 'build-selfhosted.yml'
+          backup = Path(str(custom) + '.bak')
+          backup_sh = Path(str(custom_sh) + '.bak')
+          state = Path('.github/.custom-main-sync.sha')
+          outputs = [custom, custom_sh, prepare_sh, build_sh]
+          DROP = ('Free Disk Space', 'Setup more Swap (for LTO)')
+          BOOT = r'''set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
+          '''
+
+          def add_dependencies(text):
+              root = dict((k.value, v) for k, v in yaml.compose(text).value)
+              lines = text.splitlines(keepends=True)
+              inserts = []
+              for key, job in root['jobs'].value:
+                  props = dict((k.value, v) for k, v in job.value)
+                  if 'steps' not in props or 'runs-on' not in props:
+                      continue
+                  if props['runs-on'].value != 'self-hosted':
+                      raise ValueError('Unexpected runner in self-hosted job: ' + key.value)
+                  steps = props['steps'].value
+                  if not steps:
+                      raise ValueError('Empty steps in job: ' + key.value)
+                  inserts.append(steps[0].start_mark.line)
+              if not inserts:
+                  raise ValueError('No self-hosted step jobs found')
+              block = '      - name: Check and install Ubuntu self-hosted dependencies\n        shell: bash\n        run: |\n' + ''.join('          ' + line + '\n' for line in BOOT.splitlines())
+              for pos in sorted(inserts, reverse=True):
+                  lines.insert(pos, block)
+              return ''.join(lines)
+
+          def rename(text):
+              return re.sub(r'^name:[ \t]*(.*)$', lambda m: 'name: "' + m.group(1).strip().strip('"\'') + ' (Self-Hosted)"', text, count=1, flags=re.M)
+
+
+          def to_self_hosted(text):
+              text, n = re.subn(r'^([ \t]*runs-on:[ \t]*)ubuntu-latest[ \t]*$', r'\1self-hosted', text, flags=re.M)
+              if not n:
+                  raise ValueError('No ubuntu-latest runs-on found')
+              return add_dependencies(text)
+
+
+          def repoint(text, old, new):
+              ref = './.github/workflows/'
+              if ref + old not in text:
+                  raise ValueError('Reusable workflow reference not found: ' + old)
+              return text.replace(ref + old, ref + new)
+
+
+          def drop_steps(text, names, required=()):
+              out, skip, found = [], False, set()
+              for line in text.split('\n'):
+                  m = re.match(r'^      - name:[ \t]*(.*?)[ \t]*$', line)
+                  if m:
+                      label = m.group(1).strip('"\'')
+                      skip = label in names
+                      if skip:
+                          found.add(label)
+                  elif skip and re.match(r'^ {0,5}\S|^      - ', line):
+                      skip = False
+                  if not skip:
+                      out.append(line)
+              missing = set(required) - found
+              if missing:
+                  raise ValueError('Expected step(s) not found: ' + ', '.join(sorted(missing)))
+              return '\n'.join(out)
+
+
+          def publish(target, bak, new_text):
+              if target.exists() and target.read_text() == new_text:
+                  return
+              if bak is not None and target.exists():
+                  bak.unlink(missing_ok=True)
+                  bak.write_bytes(target.read_bytes())
+              target.write_text(new_text)
+
+
+          def lint(path, shellcheck=True):
+              cmd = ['actionlint', '-ignore', 'could not parse action metadata.*unexpected key "type" for definition of input']
+              if not shellcheck:
+                  cmd.append('-shellcheck=')
+              subprocess.run(cmd + [str(path)], check=True)
+
+
+          for p in (source, prepare_src, build_src):
+              if not p.exists():
+                  raise SystemExit('Missing required source workflow: ' + str(p))
+          paths = [source, prepare_src, build_src, wf / 'sync-custom-main.yml', *sorted(Path('.github/scripts').glob('*custom_main.py'))]
+          fingerprint = hashlib.sha256(b''.join(str(p).encode() + b'\0' + p.read_bytes() for p in paths)).hexdigest()
+          if all(p.exists() for p in outputs) and state.exists() and state.read_text().strip() == fingerprint:
+              raise SystemExit(0)
+          fd, name = tempfile.mkstemp(prefix='custom-main-candidate-', suffix='.yml', dir=wf)
+          os.close(fd)
+          candidate = Path(name)
+          fd, name = tempfile.mkstemp(prefix='custom-main-candidate-sh-', suffix='.yml', dir=wf)
+          os.close(fd)
+          candidate_sh = Path(name)
+          try:
+              rules = runpy.run_path('.github/scripts/apply_custom_main.py')
+              if 'transform' in rules:
+                  candidate.write_text(rules['transform'](source.read_text()))
+              else:
+                  safe = runpy.run_path('.github/scripts/safe_custom_main.py')
+                  if len(inspect.signature(safe['main']).parameters) != 2:
+                      raise ValueError('Unsupported generator interface')
+                  safe['main'](str(source), str(candidate))
+              text = candidate.read_text()
+              root = dict((k.value, v) for k, v in yaml.compose(text).value)
+              events = root['on']
+              dispatch = next(v for k, v in events.value if k.value == 'workflow_dispatch')
+              lines = text.splitlines(keepends=True)
+              start = events.start_mark.line
+              end = events.end_mark.line
+              stop = dispatch.end_mark.line
+              text = ''.join(lines[:start]) + ''.join(lines[next(k.start_mark.line for k, v in events.value if k.value == 'workflow_dispatch'):stop]) + '\n' + ''.join(lines[end:])
+              original_inputs = dict((k.value, v) for k, v in next(v for k, v in dict((k.value,v) for k,v in yaml.compose(source.read_text()).value)['on'].value if k.value == 'workflow_dispatch').value)['inputs']
+              generated_root = dict((k.value, v) for k, v in yaml.compose(text).value)
+              generated_dispatch = next(v for k, v in generated_root['on'].value if k.value == 'workflow_dispatch')
+              inputs = dict((k.value,v) for k,v in generated_dispatch.value)['inputs']
+              names = {k.value for k,v in inputs.value}
+              if len(names) > 25:
+                  raise ValueError('More than 25 dispatch inputs')
+              for key in ('test_release_notes', 'use_nomount', 'use_ds'):
+                  if key not in names and any(k.value == key for k,v in original_inputs.value):
+                      text = re.sub(r'\binputs\.' + key + r'\b', 'false', text)
+              candidate.write_text(text)
+
+              prepare_text = rename(drop_steps(to_self_hosted(repoint(prepare_src.read_text(), 'build.yml', 'build-selfhosted.yml')), DROP))
+              build_text = rename(drop_steps(to_self_hosted(build_src.read_text()), DROP, required=DROP))
+              custom_sh_text = rename(drop_steps(to_self_hosted(repoint(text, 'prepare.yml', 'prepare-selfhosted.yml')), DROP))
+              for ref in sorted(set(re.findall(r'uses:[ \t]*\./\.github/workflows/([\w.-]+)', custom_sh_text))):
+                  if not ref.endswith('-selfhosted.yml'):
+                      print('::warning::Self-hosted variant still calls GitHub-hosted reusable workflow ' + ref)
+              candidate_sh.write_text(custom_sh_text)
+
+              publish(prepare_sh, None, prepare_text)
+              publish(build_sh, None, build_text)
+              lint(prepare_sh, shellcheck=False)
+              lint(build_sh, shellcheck=False)
+              lint(candidate)
+              lint(candidate_sh)
+              publish(custom, backup, text)
+              publish(custom_sh, backup_sh, custom_sh_text)
+              state.write_text(fingerprint + '\n')
+              for p in (custom, backup, custom_sh, backup_sh, prepare_sh, build_sh, state):
+                  if p.exists():
+                      subprocess.run(['git', 'add', str(p)], check=True)
+          finally:
+              candidate.unlink(missing_ok=True)
+              candidate_sh.unlink(missing_ok=True)
+          PY
+          actionlint .github/workflows/sync-custom-main.yml
+          git add -- "${tools[@]}"
+          if ! git diff --cached --quiet; then git commit -m "chore: custom main ${mode} ${target:0:12}"; fi
+          if [ "$(git rev-parse HEAD)" = "$ORIGINAL" ]; then exit 0; fi
+          backup="backup/${BRANCH//\//-}-before-sync-${RUN_ID}-${RUN_ATTEMPT}"
+          git push origin "$ORIGINAL:refs/heads/$backup"
+          if [ "$push_mode" = normal ]; then
+            test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$ORIGINAL"
+            git push origin "HEAD:refs/heads/$BRANCH"
+          else
+            git push --force-with-lease="refs/heads/$BRANCH:$ORIGINAL" origin "HEAD:refs/heads/$BRANCH"
+          fi
+          printf 'Branch: %s\nMode: %s\nTarget: %s\nBackup: %s\n' "$BRANCH" "$mode" "$target" "$backup" >> "$GITHUB_STEP_SUMMARY"
