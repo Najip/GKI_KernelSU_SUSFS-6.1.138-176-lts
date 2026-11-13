@@ -181,7 +181,56 @@ jobs:
           state = Path('.github/.custom-main-sync.sha')
           outputs = [custom, custom_sh, prepare_sh, build_sh]
           DROP = ('Free Disk Space', 'Setup more Swap (for LTO)')
+          BOOT = r'''set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || fail 'Expected a self-hosted runner.'
+          . /etc/os-release
+          [[ "$ID" == ubuntu ]] || fail 'Automatic dependency setup supports Ubuntu only.'
+          [[ "$(uname -m)" == x86_64 ]] || fail 'Android prebuilt toolchains require x86_64 Linux.'
+          packages=(ca-certificates git curl jq python3 zip unzip tar gzip bzip2 xz-utils lz4 zstd coreutils findutils grep sed gawk file util-linux build-essential binutils bc bison flex cpio rsync patch perl pkg-config cmake ninja-build libssl-dev libelf-dev libdw-dev zlib1g-dev liblzma-dev libncurses-dev gh)
+          missing=()
+          for package in "${packages[@]}"; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [[ "$status" == 'install ok installed' ]] || missing+=("$package")
+          done
+          if ((${#missing[@]})); then
+            privilege=()
+            if ((EUID != 0)); then
+              command -v sudo >/dev/null || fail 'Install missing packages manually or provide non-interactive sudo.'
+              sudo -n true || fail 'Missing dependencies require non-interactive sudo.'
+              privilege=(sudo -n)
+            fi
+            printf 'Installing missing dependencies: %s\n' "${missing[*]}"
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y --no-install-recommends --no-remove "${missing[@]}"
+          fi
+          for tool in git curl jq python3 zip unzip tar gzip bzip2 xz lz4 zstd timeout nproc sha256sum find grep sed awk file flock gcc g++ make ld bc bison flex cpio rsync patch perl pkg-config cmake ninja gh; do
+            command -v "$tool" >/dev/null || fail "Required tool unavailable after setup: $tool"
+          done
+          python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
+          jq --version
+          '''
 
+          def add_dependencies(text):
+              root = dict((k.value, v) for k, v in yaml.compose(text).value)
+              lines = text.splitlines(keepends=True)
+              inserts = []
+              for key, job in root['jobs'].value:
+                  props = dict((k.value, v) for k, v in job.value)
+                  if 'steps' not in props or 'runs-on' not in props:
+                      continue
+                  if props['runs-on'].value != 'self-hosted':
+                      raise ValueError('Unexpected runner in self-hosted job: ' + key.value)
+                  steps = props['steps'].value
+                  if not steps:
+                      raise ValueError('Empty steps in job: ' + key.value)
+                  inserts.append(steps[0].start_mark.line)
+              if not inserts:
+                  raise ValueError('No self-hosted step jobs found')
+              block = '      - name: Check and install Ubuntu self-hosted dependencies\n        shell: bash\n        run: |\n' + ''.join('          ' + line + '\n' for line in BOOT.splitlines())
+              for pos in sorted(inserts, reverse=True):
+                  lines.insert(pos, block)
+              return ''.join(lines)
 
           def rename(text):
               return re.sub(r'^name:[ \t]*(.*)$', lambda m: 'name: "' + m.group(1).strip().strip('"\'') + ' (Self-Hosted)"', text, count=1, flags=re.M)
@@ -191,7 +240,7 @@ jobs:
               text, n = re.subn(r'^([ \t]*runs-on:[ \t]*)ubuntu-latest[ \t]*$', r'\1self-hosted', text, flags=re.M)
               if not n:
                   raise ValueError('No ubuntu-latest runs-on found')
-              return text
+              return add_dependencies(text)
 
 
           def repoint(text, old, new):
