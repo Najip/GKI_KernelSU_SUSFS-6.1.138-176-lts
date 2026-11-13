@@ -117,7 +117,8 @@ jobs:
           if [ -f .github/scripts/normalize_removed_inputs.py ]; then tools+=(.github/scripts/normalize_removed_inputs.py); fi
           tar -cf "$saved/tools.tar" "${tools[@]}"
           custom=.github/workflows/main-6.1.x-kernelsupin-nods.yml
-          for path in "$custom" "$custom.bak"; do
+          custom_sh=.github/workflows/main-6.1.x-kernelsupin-nods-selfhosted.yml
+          for path in "$custom" "$custom.bak" "$custom_sh" "$custom_sh.bak"; do
             if [ -f "$path" ]; then cp "$path" "$saved/$(basename "$path")"; fi
           done
           mode="$SYNC_OPERATION"
@@ -159,24 +160,93 @@ jobs:
               ;;
           esac
           tar -xf "$saved/tools.tar"
-          for path in "$custom" "$custom.bak"; do
+          for path in "$custom" "$custom.bak" "$custom_sh" "$custom_sh.bak"; do
             if [ -f "$saved/$(basename "$path")" ]; then cp "$saved/$(basename "$path")" "$path"; fi
           done
           python3 - <<'PY'
           import hashlib, inspect, os, re, runpy, subprocess, tempfile
           from pathlib import Path
           import yaml
-          source = Path('.github/workflows/main.yml')
-          custom = Path('.github/workflows/main-6.1.x-kernelsupin-nods.yml')
+
+          wf = Path('.github/workflows')
+          source = wf / 'main.yml'
+          prepare_src = wf / 'prepare.yml'
+          build_src = wf / 'build.yml'
+          custom = wf / 'main-6.1.x-kernelsupin-nods.yml'
+          custom_sh = wf / 'main-6.1.x-kernelsupin-nods-selfhosted.yml'
+          prepare_sh = wf / 'prepare-selfhosted.yml'
+          build_sh = wf / 'build-selfhosted.yml'
           backup = Path(str(custom) + '.bak')
+          backup_sh = Path(str(custom_sh) + '.bak')
           state = Path('.github/.custom-main-sync.sha')
-          paths = [source, Path('.github/workflows/sync-custom-main.yml'), *sorted(Path('.github/scripts').glob('*custom_main.py'))]
+          outputs = [custom, custom_sh, prepare_sh, build_sh]
+          DROP = ('Free Disk Space', 'Setup more Swap (for LTO)')
+
+
+          def rename(text):
+              return re.sub(r'^name:[ \t]*(.*)$', lambda m: 'name: "' + m.group(1).strip().strip('"\'') + ' (Self-Hosted)"', text, count=1, flags=re.M)
+
+
+          def to_self_hosted(text):
+              text, n = re.subn(r'^([ \t]*runs-on:[ \t]*)ubuntu-latest[ \t]*$', r'\1self-hosted', text, flags=re.M)
+              if not n:
+                  raise ValueError('No ubuntu-latest runs-on found')
+              return text
+
+
+          def repoint(text, old, new):
+              ref = './.github/workflows/'
+              if ref + old not in text:
+                  raise ValueError('Reusable workflow reference not found: ' + old)
+              return text.replace(ref + old, ref + new)
+
+
+          def drop_steps(text, names, required=()):
+              out, skip, found = [], False, set()
+              for line in text.split('\n'):
+                  m = re.match(r'^      - name:[ \t]*(.*?)[ \t]*$', line)
+                  if m:
+                      label = m.group(1).strip('"\'')
+                      skip = label in names
+                      if skip:
+                          found.add(label)
+                  elif skip and re.match(r'^ {0,5}\S|^      - ', line):
+                      skip = False
+                  if not skip:
+                      out.append(line)
+              missing = set(required) - found
+              if missing:
+                  raise ValueError('Expected step(s) not found: ' + ', '.join(sorted(missing)))
+              return '\n'.join(out)
+
+
+          def publish(target, bak, new_text):
+              if target.exists() and target.read_text() == new_text:
+                  return
+              if bak is not None and target.exists():
+                  bak.unlink(missing_ok=True)
+                  bak.write_bytes(target.read_bytes())
+              target.write_text(new_text)
+
+
+          def lint(path, shellcheck=True):
+              cmd = ['actionlint'] if shellcheck else ['actionlint', '-shellcheck=']
+              subprocess.run(cmd + [str(path)], check=True)
+
+
+          for p in (source, prepare_src, build_src):
+              if not p.exists():
+                  raise SystemExit('Missing required source workflow: ' + str(p))
+          paths = [source, prepare_src, build_src, wf / 'sync-custom-main.yml', *sorted(Path('.github/scripts').glob('*custom_main.py'))]
           fingerprint = hashlib.sha256(b''.join(str(p).encode() + b'\0' + p.read_bytes() for p in paths)).hexdigest()
-          if custom.exists() and state.exists() and state.read_text().strip() == fingerprint:
+          if all(p.exists() for p in outputs) and state.exists() and state.read_text().strip() == fingerprint:
               raise SystemExit(0)
-          fd, name = tempfile.mkstemp(prefix='custom-main-candidate-', suffix='.yml', dir=custom.parent)
+          fd, name = tempfile.mkstemp(prefix='custom-main-candidate-', suffix='.yml', dir=wf)
           os.close(fd)
           candidate = Path(name)
+          fd, name = tempfile.mkstemp(prefix='custom-main-candidate-sh-', suffix='.yml', dir=wf)
+          os.close(fd)
+          candidate_sh = Path(name)
           try:
               rules = runpy.run_path('.github/scripts/apply_custom_main.py')
               if 'transform' in rules:
@@ -206,19 +276,30 @@ jobs:
                   if key not in names and any(k.value == key for k,v in original_inputs.value):
                       text = re.sub(r'\binputs\.' + key + r'\b', 'false', text)
               candidate.write_text(text)
-              subprocess.run(['actionlint', str(candidate)], check=True)
-              if not custom.exists() or custom.read_bytes() != candidate.read_bytes():
-                  if custom.exists():
-                      old = custom.read_bytes()
-                      backup.unlink(missing_ok=True)
-                      backup.write_bytes(old)
-                  os.replace(candidate, custom)
+
+              prepare_text = rename(drop_steps(to_self_hosted(repoint(prepare_src.read_text(), 'build.yml', 'build-selfhosted.yml')), DROP))
+              build_text = rename(drop_steps(to_self_hosted(build_src.read_text()), DROP, required=DROP))
+              custom_sh_text = rename(drop_steps(to_self_hosted(repoint(text, 'prepare.yml', 'prepare-selfhosted.yml')), DROP))
+              for ref in sorted(set(re.findall(r'uses:[ \t]*\./\.github/workflows/([\w.-]+)', custom_sh_text))):
+                  if not ref.endswith('-selfhosted.yml'):
+                      print('::warning::Self-hosted variant still calls GitHub-hosted reusable workflow ' + ref)
+              candidate_sh.write_text(custom_sh_text)
+
+              publish(prepare_sh, None, prepare_text)
+              publish(build_sh, None, build_text)
+              lint(prepare_sh, shellcheck=False)
+              lint(build_sh, shellcheck=False)
+              lint(candidate)
+              lint(candidate_sh)
+              publish(custom, backup, text)
+              publish(custom_sh, backup_sh, custom_sh_text)
               state.write_text(fingerprint + '\n')
-              for p in (custom, backup, state):
+              for p in (custom, backup, custom_sh, backup_sh, prepare_sh, build_sh, state):
                   if p.exists():
                       subprocess.run(['git', 'add', str(p)], check=True)
           finally:
               candidate.unlink(missing_ok=True)
+              candidate_sh.unlink(missing_ok=True)
           PY
           actionlint .github/workflows/sync-custom-main.yml
           git add -- "${tools[@]}"
