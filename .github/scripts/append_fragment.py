@@ -26,6 +26,45 @@ SYMBOL = re.compile(r"^(?:# )?(CONFIG_[A-Za-z0-9_]+)(?:=.*| is not set)$")
 NOT_SET = re.compile(r"^(?:# CONFIG_[A-Za-z0-9_]+ is not set|CONFIG_[A-Za-z0-9_]+=n)$")
 
 
+# Root implementations live either symlinked into the tree (drivers/kernelsu)
+# or beside it as their own checkout (kernel/BakaSU, kernel/KernelSU, ...).
+KSU_CHECKOUTS = (
+    "KernelSU",
+    "KernelSU-Next",
+    "BakaSU",
+    "SukiSU-Ultra",
+    "KowSU",
+    "FinaSU",
+)
+
+
+def scan_roots() -> list[str]:
+    roots = ["."]
+    for name in KSU_CHECKOUTS:
+        for candidate in (f"../{name}", f"./{name}"):
+            if os.path.isdir(candidate):
+                roots.append(candidate)
+                break
+    return roots
+
+
+def _walk_all(root: str, visited: set[str]):
+    """os.walk over one or more roots (colon-free list in root), link-safe."""
+    for base in root.split(os.pathsep):
+        if not os.path.isdir(base):
+            continue
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=True):
+            real = os.path.realpath(dirpath)
+            if real in visited:
+                dirnames[:] = []
+                continue
+            visited.add(real)
+            dirnames[:] = [
+                d for d in dirnames if d not in {"out", ".git", "bazel-out", "bazel-bin"}
+            ]
+            yield dirpath, dirnames, filenames
+
+
 def declared_symbols(root: str = ".") -> set[str] | None:
     """Every symbol the tree declares in a Kconfig file, or None if unreadable.
 
@@ -36,11 +75,12 @@ def declared_symbols(root: str = ".") -> set[str] | None:
     """
     names: set[str] = set()
     seen_any = False
-    for dirpath, dirnames, filenames in os.walk(root):
-        # Skip the build output tree: it holds copies, not sources.
-        dirnames[:] = [
-            d for d in dirnames if d not in {"out", ".git", "bazel-out", "bazel-bin"}
-        ]
+    visited: set[str] = set()
+    # followlinks: the root implementation (KernelSU / BakaSU / ...) is symlinked
+    # into the tree, so its Kconfig lives outside this directory. Without this the
+    # scan misses CONFIG_KSU, every CONFIG_KSU_SUSFS_* and CONFIG_BBG, and the
+    # prune silently strips them. visited guards against link cycles.
+    for dirpath, _dirnames, filenames in _walk_all(root, visited):
         for name in filenames:
             if not name.startswith("Kconfig"):
                 continue
@@ -106,7 +146,7 @@ def main() -> None:
         # not declared yet when the entry is appended, so the check cannot live
         # in the append path (it would drop CONFIG_DEFAULT_BBR and friends).
         existing = read_symbols(args.dest)
-        declared = declared_symbols()
+        declared = declared_symbols(os.pathsep.join(scan_roots()))
         if declared is None:
             print("WARNING: no Kconfig files found here - cannot check declarations")
             return
