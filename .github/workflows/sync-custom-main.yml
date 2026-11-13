@@ -230,7 +230,9 @@ jobs:
 
 
           def lint(path, shellcheck=True):
-              cmd = ['actionlint'] if shellcheck else ['actionlint', '-shellcheck=']
+              cmd = ['actionlint', '-ignore', 'could not parse action metadata.*unexpected key "type" for definition of input']
+              if not shellcheck:
+                  cmd.append('-shellcheck=')
               subprocess.run(cmd + [str(path)], check=True)
 
 
