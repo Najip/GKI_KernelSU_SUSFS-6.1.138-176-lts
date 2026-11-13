@@ -91,10 +91,41 @@ def read_symbols(path: str) -> dict[str, str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("source", help="fragment to append, or - for stdin")
+    parser.add_argument("source", nargs="?", help="fragment to append, or - for stdin")
     parser.add_argument("--dest", default="common/wild_defconfig.fragment")
     parser.add_argument("--label", default=None, help="name shown in the log")
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="drop entries whose symbol the tree does not declare, then exit",
+    )
     args = parser.parse_args()
+
+    if args.prune:
+        # Run this once every patch has landed: a symbol a patch adds later is
+        # not declared yet when the entry is appended, so the check cannot live
+        # in the append path (it would drop CONFIG_DEFAULT_BBR and friends).
+        existing = read_symbols(args.dest)
+        declared = declared_symbols()
+        if declared is None:
+            print("WARNING: no Kconfig files found here - cannot check declarations")
+            return
+        kept = filter_undeclared(existing, declared, "prune")
+        # Tail entries can predate the normalisation above (or come from a file
+        # that was written by hand), so apply the same '=n' rewrite here.
+        for key, line in list(kept.items()):
+            if line.endswith("=n"):
+                kept[key] = f"# {key} is not set"
+        with open(args.dest, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(kept.values()) + "\n")
+        print(
+            f"prune -> {args.dest}: {len(existing) - len(kept)} undeclared dropped, "
+            f"{len(kept)} symbol(s) kept"
+        )
+        return
+
+    if not args.source:
+        sys.exit("ERROR: need a source fragment (or use --prune)")
 
     label = args.label or ("stdin" if args.source == "-" else os.path.basename(args.source))
     if args.source == "-":
@@ -136,22 +167,12 @@ def main() -> None:
                 symbols[key] = item
                 added += 1
 
-    dropped = 0
-    if os.environ.get("SKIP_DECLARED_CHECK") != "1":
-        declared = declared_symbols()
-        if declared is None:
-            print("WARNING: no Kconfig files found here - cannot check declarations, writing as-is")
-        else:
-            kept = filter_undeclared(symbols, declared, label)
-            dropped = len(symbols) - len(kept)
-            symbols = kept
-
     with open(args.dest, "w", encoding="utf-8") as fh:
         fh.write("\n".join(symbols.values()) + "\n")
 
     print(
         f"{label} -> {args.dest}: +{added} new, {overridden} overridden, "
-        f"{skipped} non-config line(s) skipped, {dropped} undeclared dropped, "
+        f"{skipped} non-config line(s) skipped, "
         f"{len(symbols)} symbol(s) total (was {before})"
     )
 

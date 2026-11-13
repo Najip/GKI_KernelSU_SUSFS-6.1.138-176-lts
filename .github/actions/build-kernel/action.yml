@@ -50,6 +50,21 @@ runs:
     #       exit 1
     #     fi
 
+    - name: 'Prune fragment symbols this tree does not declare'
+      # Runs last, after every patch: Kleaf rejects a fragment entry whose
+      # symbol the tree does not declare and the error names the fragment, not
+      # the step or patch that contributed it. Symbols a patch adds later are
+      # not declared when the entry is appended, so the check cannot live in
+      # append_fragment.py's append path (it dropped CONFIG_DEFAULT_BBR that
+      # way, which silently reverted CONFIG_DEFAULT_TCP_CONG to "cubic").
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+        [ -f wild_defconfig.fragment ] || { echo "no wild_defconfig.fragment - nothing to prune"; exit 0; }
+        python3 "${{ github.workspace }}/.github/scripts/append_fragment.py" \
+          --prune --dest wild_defconfig.fragment
+
     - name: 'Build Kernel'
       shell: bash
       working-directory: ${{ github.workspace }}/kernel
