@@ -172,6 +172,8 @@ jobs:
           source = wf / 'main.yml'
           prepare_src = wf / 'prepare.yml'
           build_src = wf / 'build.yml'
+          action_src = Path('.github/actions/build-kernel/action.yml')
+          action_sh = Path('.github/actions/build-kernel-selfhosted/action.yml')
           custom = wf / 'main-6.1.x-kernelsupin-nods.yml'
           custom_sh = wf / 'main-6.1.x-kernelsupin-nods-selfhosted.yml'
           prepare_sh = wf / 'prepare-selfhosted.yml'
@@ -179,7 +181,7 @@ jobs:
           backup = Path(str(custom) + '.bak')
           backup_sh = Path(str(custom_sh) + '.bak')
           state = Path('.github/.custom-main-sync.sha')
-          outputs = [custom, custom_sh, prepare_sh, build_sh]
+          outputs = [custom, custom_sh, prepare_sh, build_sh, action_sh]
           DROP = ('Free Disk Space', 'Setup more Swap (for LTO)')
           BOOT = r'''set -euo pipefail
           fail() { echo "::error::$*" >&2; exit 1; }
@@ -210,6 +212,42 @@ jobs:
           python3 -c 'import json, ssl, urllib.request, zipfile, lzma'
           jq --version
           '''
+          PATH_SETUP = r'''set -euo pipefail
+          [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || { echo 'Expected self-hosted runner' >&2; exit 1; }
+          out=$(mktemp -d "${RUNNER_TEMP:?}/gki-out.XXXXXX")
+          cache="${XDG_CACHE_HOME:-$HOME/.cache}/gki-kernel/bazel"
+          mkdir -p "$cache"
+          for dir in "$out" "$cache"; do
+            probe=$(mktemp "$dir/.write-test.XXXXXX")
+            rm -f "$probe"
+          done
+          printf 'GKI_OUT_DIR=%s\nGKI_BAZEL_CACHE=%s\n' "$out" "$cache" >> "$GITHUB_ENV"
+          printf 'Build output: %s\nBazel cache: %s\n' "$out" "$cache"
+          '''
+
+          def selfhosted_action(text):
+              data = yaml.safe_load(text)
+              if data['runs']['using'] != 'composite':
+                  raise ValueError('build-kernel is no longer a composite action')
+              seen = 0
+              for step in data['runs']['steps']:
+                  if 'run' not in step:
+                      continue
+                  script = step['run']
+                  seen += script.count('/home/runner/out')
+                  script = script.replace('--disk_cache=/home/runner/.cache/bazel', '--disk_cache="$GKI_BAZEL_CACHE"')
+                  script = script.replace('/home/runner/out', '${GKI_OUT_DIR}')
+                  script = script.replace('          ${GKI_OUT_DIR}/.config;', '          "${GKI_OUT_DIR}/.config";')
+                  script = script.replace('find bazel-bin/common ${GKI_OUT_DIR}', 'find bazel-bin/common "${GKI_OUT_DIR}"')
+                  script = script.replace('Image ${GKI_OUT_DIR}/dist/Image;', 'Image "${GKI_OUT_DIR}/dist/Image";')
+                  if '/home/runner' in script:
+                      raise ValueError('Unhandled hosted path in build action')
+                  step['run'] = script
+              if not seen:
+                  raise ValueError('Expected build output path not found')
+              data['runs']['steps'].insert(0, {'name': 'Initialize runner-owned build paths', 'shell': 'bash', 'run': PATH_SETUP})
+              data['name'] += ' (Self-Hosted)'
+              return yaml.safe_dump(data, sort_keys=False, width=1000)
 
           def add_dependencies(text):
               root = dict((k.value, v) for k, v in yaml.compose(text).value)
@@ -285,10 +323,10 @@ jobs:
               subprocess.run(cmd + [str(path)], check=True)
 
 
-          for p in (source, prepare_src, build_src):
+          for p in (source, prepare_src, build_src, action_src):
               if not p.exists():
                   raise SystemExit('Missing required source workflow: ' + str(p))
-          paths = [source, prepare_src, build_src, wf / 'sync-custom-main.yml', *sorted(Path('.github/scripts').glob('*custom_main.py'))]
+          paths = [source, prepare_src, build_src, action_src, wf / 'sync-custom-main.yml', *sorted(Path('.github/scripts').glob('*custom_main.py'))]
           fingerprint = hashlib.sha256(b''.join(str(p).encode() + b'\0' + p.read_bytes() for p in paths)).hexdigest()
           if all(p.exists() for p in outputs) and state.exists() and state.read_text().strip() == fingerprint:
               raise SystemExit(0)
@@ -316,7 +354,7 @@ jobs:
               end = events.end_mark.line
               stop = dispatch.end_mark.line
               text = ''.join(lines[:start]) + ''.join(lines[next(k.start_mark.line for k, v in events.value if k.value == 'workflow_dispatch'):stop]) + '\n' + ''.join(lines[end:])
-              original_inputs = dict((k.value, v) for k, v in next(v for k, v in dict((k.value,v) for k,v in yaml.compose(source.read_text()).value)['on'].value if k.value == 'workflow_dispatch').value)['inputs']
+              original_inputs = dict((k.value, v) for k, v in next(v for k, v in next(v for k,v in yaml.compose(source.read_text()).value if k.value == 'on').value if k.value == 'workflow_dispatch').value)['inputs']
               generated_root = dict((k.value, v) for k, v in yaml.compose(text).value)
               generated_dispatch = next(v for k, v in generated_root['on'].value if k.value == 'workflow_dispatch')
               inputs = dict((k.value,v) for k,v in generated_dispatch.value)['inputs']
@@ -330,6 +368,13 @@ jobs:
 
               prepare_text = rename(drop_steps(to_self_hosted(repoint(prepare_src.read_text(), 'build.yml', 'build-selfhosted.yml')), DROP))
               build_text = rename(drop_steps(to_self_hosted(build_src.read_text()), DROP, required=DROP))
+              action_ref = './.github/actions/build-kernel'
+              build_text, replacements = re.subn(r'(?m)^(\s*uses:\s*)' + re.escape(action_ref) + r'\s*$', r'\1./.github/actions/build-kernel-selfhosted', build_text)
+              if replacements != 1:
+                  raise ValueError('Expected exactly one build-kernel action call')
+              action_text = selfhosted_action(action_src.read_text())
+              action_sh.parent.mkdir(parents=True, exist_ok=True)
+              publish(action_sh, None, action_text)
               custom_sh_text = rename(drop_steps(to_self_hosted(repoint(text, 'prepare.yml', 'prepare-selfhosted.yml')), DROP))
               for ref in sorted(set(re.findall(r'uses:[ \t]*\./\.github/workflows/([\w.-]+)', custom_sh_text))):
                   if not ref.endswith('-selfhosted.yml'):
@@ -345,7 +390,7 @@ jobs:
               publish(custom, backup, text)
               publish(custom_sh, backup_sh, custom_sh_text)
               state.write_text(fingerprint + '\n')
-              for p in (custom, backup, custom_sh, backup_sh, prepare_sh, build_sh, state):
+              for p in (custom, backup, custom_sh, backup_sh, prepare_sh, build_sh, action_sh, state):
                   if p.exists():
                       subprocess.run(['git', 'add', str(p)], check=True)
           finally:
