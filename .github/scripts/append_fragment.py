@@ -119,6 +119,14 @@ def main() -> None:
                 skipped += 1
                 continue
             key = match.group(1)
+            # Kleaf's own check (build/kernel/kleaf/impl/config_utils.bzl) greps
+            # .config for the symbol and then blanks the value only for the
+            # '# CONFIG_X is not set' spelling, so a literal 'CONFIG_X=n' can
+            # never match: .config holds the comment form for a bool that is off
+            # and the check compares 'CONFIG_X=n' against ''. Write the form the
+            # checker understands.
+            if item.endswith("=n"):
+                item = f"# {key} is not set"
             if key in symbols:
                 if symbols[key] != item:
                     print(f"note: {label} overrides {key}: {symbols[key]} -> {item}")
