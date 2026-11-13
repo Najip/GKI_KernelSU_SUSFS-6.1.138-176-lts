@@ -23,6 +23,57 @@ import sys
 
 SYMBOL = re.compile(r"^(?:# )?(CONFIG_[A-Za-z0-9_]+)(?:=.*| is not set)$")
 
+NOT_SET = re.compile(r"^(?:# CONFIG_[A-Za-z0-9_]+ is not set|CONFIG_[A-Za-z0-9_]+=n)$")
+
+
+def declared_symbols(root: str = ".") -> set[str] | None:
+    """Every symbol the tree declares in a Kconfig file, or None if unreadable.
+
+    Kleaf's fragment check rejects a symbol the tree does not declare
+    (``ERROR: CONFIG_X: actual '', expected 'CONFIG_X=y' ... Are they declared
+    in Kconfig?``) and the error names the fragment, not the patch or the step
+    that contributed it. Every Kconfig* file is scanned once, whatever depth.
+    """
+    names: set[str] = set()
+    seen_any = False
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Skip the build output tree: it holds copies, not sources.
+        dirnames[:] = [
+            d for d in dirnames if d not in {"out", ".git", "bazel-out", "bazel-bin"}
+        ]
+        for name in filenames:
+            if not name.startswith("Kconfig"):
+                continue
+            seen_any = True
+            try:
+                with open(os.path.join(dirpath, name), encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        if line.startswith("config "):
+                            names.add("CONFIG_" + line.split()[1].strip())
+                        elif line.startswith("menuconfig "):
+                            names.add("CONFIG_" + line.split()[1].strip())
+            except OSError:
+                continue
+    return names if seen_any else None
+
+
+def filter_undeclared(symbols: dict[str, str], declared: set[str], label: str) -> dict[str, str]:
+    """Drop entries the tree cannot honour, so Kleaf never sees them."""
+    kept: dict[str, str] = {}
+    for key, line in symbols.items():
+        if key in declared:
+            kept[key] = line
+            continue
+        if NOT_SET.match(line):
+            print(f"note: {label}: {key} is not declared here and it asks for 'off' - dropped (absence is off)")
+        else:
+            print(
+                f"WARNING: {label}: {key} is not declared in any Kconfig here - dropped "
+                f"({line}); the tree's version does not have this symbol"
+            )
+    return kept
+
+
 
 def read_symbols(path: str) -> dict[str, str]:
     """Existing fragment as symbol -> line, preserving first-appearance order."""
@@ -77,13 +128,23 @@ def main() -> None:
                 symbols[key] = item
                 added += 1
 
+    dropped = 0
+    if os.environ.get("SKIP_DECLARED_CHECK") != "1":
+        declared = declared_symbols()
+        if declared is None:
+            print("WARNING: no Kconfig files found here - cannot check declarations, writing as-is")
+        else:
+            kept = filter_undeclared(symbols, declared, label)
+            dropped = len(symbols) - len(kept)
+            symbols = kept
+
     with open(args.dest, "w", encoding="utf-8") as fh:
         fh.write("\n".join(symbols.values()) + "\n")
 
     print(
         f"{label} -> {args.dest}: +{added} new, {overridden} overridden, "
-        f"{skipped} non-config line(s) skipped, {len(symbols)} symbol(s) total"
-        f" (was {before})"
+        f"{skipped} non-config line(s) skipped, {dropped} undeclared dropped, "
+        f"{len(symbols)} symbol(s) total (was {before})"
     )
 
 
