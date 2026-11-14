@@ -432,7 +432,6 @@ jobs:
       - name: ABI gate
         # Compares Module.symvers CRCs against the stock ABI of the tree that was
         # built and fails on any symbol whose CRC moved.
-        if: always()
         uses: ./.github/actions/abi-gate
         with:
           version: ${{ inputs.version }}
@@ -441,7 +440,6 @@ jobs:
         if: always()
         uses: ./.github/actions/extract-the-built-config
       - name: Verify the fragment landed in .config
-        if: always()
         uses: ./.github/actions/verify-fragment
 
       - name: Consolidated Build Summary
