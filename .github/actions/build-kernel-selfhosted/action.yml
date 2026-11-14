@@ -20,10 +20,16 @@ runs:
   - name: Initialize runner-owned build paths
     shell: bash
     run: "set -euo pipefail\n[[ \"${RUNNER_ENVIRONMENT:-}\" == self-hosted ]] || { echo 'Expected self-hosted runner' >&2; exit 1; }\nout=$(mktemp -d \"${RUNNER_TEMP:?}/gki-out.XXXXXX\")\ncache=\"${XDG_CACHE_HOME:-$HOME/.cache}/gki-kernel/bazel\"\nmkdir -p \"$cache\"\nfor dir in \"$out\" \"$cache\"; do\n  probe=$(mktemp \"$dir/.write-test.XXXXXX\")\n  rm -f \"$probe\"\ndone\nprintf 'GKI_OUT_DIR=%s\\nGKI_BAZEL_CACHE=%s\\n' \"$out\" \"$cache\" >> \"$GITHUB_ENV\"\nprintf 'Build output: %s\\nBazel cache: %s\\n' \"$out\" \"$cache\"\n"
-  - name: Build Kernel
+  - name: Build Kernel (build.sh)
+    if: startsWith(inputs.version, 'android12') || startsWith(inputs.version, 'android13')
     shell: bash
     working-directory: ${{ github.workspace }}/kernel
-    run: "PAGE_SIZE=\"${{ inputs.page_size }}\"\nif [ -f \"build/build.sh\" ]; then\n  if [ \"$PAGE_SIZE\" != \"4k\" ]; then\n    echo \"ERROR: page_size=${PAGE_SIZE} is only supported by the Kleaf (Bazel) build; this tree uses build/build.sh.\" >&2\n    exit 1\n  fi\n  cp common/wild_defconfig.fragment wild_build.config\n  export BUILD_CONFIG_FRAGMENTS=\"wild_build.config\"\n  BUILD_GKI_ARTIFACTS=\"\" \\\n  BUILD_GKI_CERTIFICATION_TOOLS=0 \\\n  BUILD_SYSTEM_DLKM=0 \\\n  SKIP_VENDOR_BOOT=1 \\\n  SKIP_EXT_MODULES=1 \\\n  SKIP_CP_KERNEL_HDR=1 \\\n  OUT_DIR=\"${GKI_OUT_DIR}\" \\\n  LTO=thin \\\n  BUILD_CONFIG=common/build.config.gki.aarch64 \\\n  build/build.sh -j\"$(nproc)\"\nelse\n  PAGE_SIZE_FLAGS=()\n  if [ \"$PAGE_SIZE\" = \"16k\" ]; then\n    PAGE_SIZE_FLAGS+=(--page_size=16k)\n  fi\n  tools/bazel build \\\n    --config=fast \\\n    \"${PAGE_SIZE_FLAGS[@]}\" \\\n    --defconfig_fragment=//common:wild_defconfig.fragment \\\n    //common:kernel_aarch64\nfi\n"
+    run: "set -euo pipefail\nif [ \"${{ inputs.page_size }}\" != \"4k\" ]; then\n  echo \"ERROR: page_size=${{ inputs.page_size }} is only supported by the Kleaf (Bazel) build; this tree uses build/build.sh.\" >&2\n  exit 1\nfi\n# A build-config fragment, not a Kconfig one: build.sh sources it, and the\n# POST_DEFCONFIG_CMDS it sets is what merges our config into .config.\ncp \"${{ github.workspace }}/.github/actions/build-kernel/legacy-fragment.config\" legacy-fragment.config\nexport BUILD_CONFIG_FRAGMENTS=\"legacy-fragment.config\"\nBUILD_GKI_ARTIFACTS=\"\" \\\nBUILD_GKI_CERTIFICATION_TOOLS=0 \\\nBUILD_SYSTEM_DLKM=0 \\\nSKIP_VENDOR_BOOT=1 \\\nSKIP_EXT_MODULES=1 \\\nSKIP_CP_KERNEL_HDR=1 \\\nOUT_DIR=\"${GKI_OUT_DIR}\" \\\nLTO=thin \\\nBUILD_CONFIG=common/build.config.gki.aarch64 \\\nbuild/build.sh -j\"$(nproc)\"\n"
+  - name: Build Kernel (Kleaf)
+    if: ${{ !startsWith(inputs.version, 'android12') && !startsWith(inputs.version, 'android13') }}
+    shell: bash
+    working-directory: ${{ github.workspace }}/kernel
+    run: "set -euo pipefail\nPAGE_SIZE_FLAGS=()\nif [ \"${{ inputs.page_size }}\" = \"16k\" ]; then\n  PAGE_SIZE_FLAGS+=(--page_size=16k)\nfi\ntools/bazel build \\\n  --config=fast \\\n  \"${PAGE_SIZE_FLAGS[@]}\" \\\n  --defconfig_fragment=//common:wild_defconfig.fragment \\\n  //common:kernel_aarch64\n"
   - name: Verify Page Size in Generated .config
     shell: bash
     working-directory: ${{ github.workspace }}/kernel
