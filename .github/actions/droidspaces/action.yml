@@ -113,3 +113,12 @@ runs:
         A="${{ github.workspace }}/.github/actions/droidspaces"
         S="${{ github.workspace }}/.github/scripts/append_fragment.py"
         python3 "$S" "$A/droidspaces_defconfig.fragment" --dest wild_defconfig.fragment --label droidspaces
+        # CONFIG_SYSVIPC is only free where task_struct can absorb it. On 6.18 that
+        # requires the SysV task-table port, which is disabled, so the IPC pair is
+        # appended everywhere else and skipped there - enabling it on 6.18 moved
+        # 6,388 exported-symbol CRCs (run 43743517821) and the ABI gate rejected it.
+        if [ "${{ inputs.version }}" = "android17-6.18" ]; then
+          echo "[-] 6.18: skipping the IPC fragment (SysV task-table port is disabled)"
+        else
+          python3 "$S" "$A/droidspaces-ipc.fragment" --dest wild_defconfig.fragment --label droidspaces-ipc
+        fi
