@@ -6,3 +6,4 @@
 # the port back on.
 CONFIG_SYSVIPC=y
 CONFIG_POSIX_MQUEUE=y
+CONFIG_IPC_NS=y

@@ -8,8 +8,10 @@
 # DroidSpaces patch without touching task_struct, so the split is only about
 # 6.18 until that port is re-enabled.
 #
-# Namespaces
-CONFIG_IPC_NS=y
+# Namespaces. IPC_NS lives with the IPC pair in droidspaces-ipc.fragment: its
+# Kconfig depends on SYSVIPC, so without that it is undeclared-or-off and the
+# Kleaf fragment check fails with
+#   CONFIG_IPC_NS: actual '', expected 'y' from common/wild_defconfig.fragment
 CONFIG_PID_NS=y
 
 # optional but recommended: docker's unsafe procfs check
