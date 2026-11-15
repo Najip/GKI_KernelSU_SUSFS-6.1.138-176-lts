@@ -3,6 +3,7 @@
 # Refreshes a mirror only when the remote refs changed, then redirects git to it. Never fails a job.
 set -uo pipefail
 [[ "${RUNNER_ENVIRONMENT:-}" == self-hosted ]] || { echo '[mirror] not a self-hosted runner; skipping'; exit 0; }
+bash "$(dirname "${BASH_SOURCE[0]}")/runner_preflight_cache.sh" || true
 root="${GKI_MIRROR_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/gki-kernel/git-mirrors}"
 list="${GKI_MIRROR_LIST:-$root/repos.txt}"
 conf="$root/mirrors.gitconfig"
