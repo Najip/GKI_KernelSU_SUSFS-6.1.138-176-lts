@@ -122,6 +122,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v7
 
+      - name: Refresh dependency git mirrors
+        shell: bash
+        run: bash .github/scripts/git_mirror_cache.sh
+
       - name: Download Prefetched Stock Configs
         if: inputs.stock_config_artifact != ''
         continue-on-error: true
