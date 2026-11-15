@@ -7,6 +7,21 @@ bash "$(dirname "${BASH_SOURCE[0]}")/runner_preflight_cache.sh" || true
 root="${GKI_MIRROR_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/gki-kernel/git-mirrors}"
 list="${GKI_MIRROR_LIST:-$root/repos.txt}"
 conf="$root/mirrors.gitconfig"
+defaults=(
+  https://github.com/tiann/KernelSU.git
+  https://github.com/KernelSU-Next/KernelSU-Next.git
+  https://github.com/Baka-SU/BakaSU.git
+  https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
+  https://github.com/KOWX712/KernelSU.git
+  https://github.com/LyraVoid/FinaSU.git
+  https://github.com/WildKernels/kernel_patches.git
+  https://github.com/WildKernels/AnyKernel3.git
+  https://github.com/maxsteeel/nomount.git
+  https://gitlab.com/simonpunk/susfs4ksu.git
+  https://github.com/ravindu644/USB-Arsenal.git
+  https://github.com/ravindu644/Droidspaces-OSS.git
+  https://github.com/vc-teahouse/Baseband-guard.git
+)
 mkdir -p "$root"
 exec 8>"$root/.lock"
 flock 8
@@ -14,19 +29,7 @@ export GIT_TERMINAL_PROMPT=0
 real_global="${GKI_REAL_GITCONFIG:-$HOME/.gitconfig}"
 g() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git "$@"; }
 if [[ ! -f "$list" ]]; then
-  cat > "$list" <<'LIST'
-# One upstream URL per line. Add anything the build clones repeatedly.
-https://github.com/tiann/KernelSU.git
-https://github.com/KernelSU-Next/KernelSU-Next.git
-https://github.com/Baka-SU/BakaSU.git
-https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
-https://github.com/KOWX712/KernelSU.git
-https://github.com/LyraVoid/FinaSU.git
-https://github.com/WildKernels/kernel_patches.git
-https://github.com/WildKernels/AnyKernel3.git
-https://github.com/maxsteeel/nomount.git
-https://gitlab.com/simonpunk/susfs4ksu.git
-LIST
+  printf '%s\n' '# Extra upstream URLs to mirror, one per line. Built-in defaults are always included.' > "$list"
 fi
 : > "$conf.new"
 if [[ "${GKI_MIRROR_DISABLE:-0}" != 1 ]]; then
@@ -34,7 +37,7 @@ if [[ "${GKI_MIRROR_DISABLE:-0}" != 1 ]]; then
     [[ -n "$url" && "$url" != \#* ]] || continue
     name=$(printf '%s' "$url" | sha256sum | cut -c1-16)
     m="$root/$name.git"
-    if ! out=$(g ls-remote --symref "$url" HEAD 'refs/heads/*' 'refs/tags/*' 2>/dev/null) || [[ -z "$out" ]]; then
+    if ! out=$(timeout 60 env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git ls-remote --symref "$url" HEAD 'refs/heads/*' 'refs/tags/*' 2>/dev/null) || [[ -z "$out" ]]; then
       echo "[mirror] $url: unreachable, using network"
       continue
     fi
@@ -54,7 +57,7 @@ if [[ "${GKI_MIRROR_DISABLE:-0}" != 1 ]]; then
       state=updated
     fi
     if [[ "$state" != unchanged ]]; then
-      if ! g -C "$m" fetch --prune --quiet origin; then
+      if ! timeout 900 env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$m" fetch --prune --quiet origin; then
         echo "[mirror] $url: fetch failed, using network"
         [[ "$state" == cloned ]] && rm -rf "$m"
         continue
@@ -65,7 +68,7 @@ if [[ "${GKI_MIRROR_DISABLE:-0}" != 1 ]]; then
     echo "[mirror] $url: $state"
     base=${url%.git}
     printf '[url "file://%s"]\n\tinsteadOf = %s\n\tinsteadOf = %s\n' "$m" "$url" "$base" >> "$conf.new"
-  done < "$list"
+  done < <({ printf '%s\n' "${defaults[@]}"; cat "$list" 2>/dev/null; } | awk '$1 != "" && $1 !~ /^#/ && !seen[$1]++ {print $1}')
 fi
 mv "$conf.new" "$conf"
 if ! GIT_CONFIG_GLOBAL="$real_global" git config --global --get-all include.path 2>/dev/null | grep -qxF "$conf"; then
