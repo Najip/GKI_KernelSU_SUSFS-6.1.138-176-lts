@@ -1,5 +1,7 @@
 name: Sync Custom Main Workflow
 on:
+  schedule:
+    - cron: '17,47 * * * *'
   workflow_dispatch:
     inputs:
       upstream_sha:
@@ -31,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        branch: ${{ fromJSON(format('["{0}"]', github.ref_name)) }}
+        branch: ${{ fromJSON(github.event_name == 'schedule' && '["main","feat/usb-arsenal"]' || format('["{0}"]', github.ref_name)) }}
     concurrency:
       group: custom-main-sync-${{ matrix.branch }}
       cancel-in-progress: false
@@ -402,7 +404,8 @@ jobs:
               build_text, replacements = re.subn(r'(?m)^(\s*uses:\s*)' + re.escape(action_ref) + r'\s*$', r'\1./.github/actions/build-kernel-selfhosted', build_text)
               if replacements != 1:
                   raise ValueError('Expected exactly one build-kernel action call')
-              build_text = add_mirror_refresh(build_text)
+              if Path('.github/scripts/git_mirror_cache.sh').exists():
+                  build_text = add_mirror_refresh(build_text)
               action_text = selfhosted_action(action_src.read_text())
               action_sh.parent.mkdir(parents=True, exist_ok=True)
               publish(action_sh, None, action_text)
