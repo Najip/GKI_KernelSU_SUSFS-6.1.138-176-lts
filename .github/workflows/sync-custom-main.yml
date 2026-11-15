@@ -16,6 +16,10 @@ on:
         description: 'Force reset to the upstream tip even when a clean merge is possible'
         type: boolean
         default: false
+      regenerate_only:
+        description: 'Regenerate the custom workflows from the current tree without merging upstream'
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency:
@@ -46,10 +50,15 @@ jobs:
           UPSTREAM_SHA: ${{ inputs.upstream_sha }}
           REVERT_SHA: ${{ inputs.revert_sha }}
           FORCE_TIP: ${{ inputs.force_upstream_tip }}
+          REGENERATE: ${{ inputs.regenerate_only }}
         run: |
           set -euo pipefail
           if [ -n "$UPSTREAM_SHA" ] && [ -n "$REVERT_SHA" ]; then
             echo '::error::Set either upstream_sha or revert_sha, not both.' >&2
+            exit 1
+          fi
+          if [ "$REGENERATE" = "true" ] && { [ -n "$UPSTREAM_SHA" ] || [ -n "$REVERT_SHA" ] || [ "$FORCE_TIP" = "true" ]; }; then
+            echo '::error::regenerate_only cannot be combined with other sync options.' >&2
             exit 1
           fi
           for sha in "$UPSTREAM_SHA" "$REVERT_SHA"; do
@@ -63,13 +72,15 @@ jobs:
             mode='revert-sha'
           elif [ "$FORCE_TIP" = "true" ]; then
             mode='upstream-tip'
+          elif [ "$REGENERATE" = "true" ]; then
+            mode='regenerate'
           fi
           git fetch origin "refs/heads/$BRANCH"
           original=$(git rev-parse FETCH_HEAD)
           test "$(git rev-parse HEAD)" = "$original"
           echo "original=$original" >> "$GITHUB_OUTPUT"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          if [ "$mode" != revert-sha ]; then
+          if [ "$mode" != revert-sha ] && [ "$mode" != regenerate ]; then
             git fetch https://github.com/WildKernels/GKI_KernelSU_SUSFS.git "refs/heads/$BRANCH"
             upstream=$(git rev-parse FETCH_HEAD)
             echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
@@ -153,6 +164,10 @@ jobs:
             upstream-tip)
               git reset --hard "$UPSTREAM"
               git clean -fd
+              ;;
+            regenerate)
+              target="$ORIGINAL"
+              push_mode=normal
               ;;
             auto)
               if git merge --no-edit "$UPSTREAM"; then
@@ -280,6 +295,14 @@ jobs:
           def rename(text):
               return re.sub(r'^name:[ \t]*(.*)$', lambda m: 'name: "' + m.group(1).strip().strip('"\'') + ' (Self-Hosted)"', text, count=1, flags=re.M)
 
+          MIRROR_STEP = '\n      - name: Refresh dependency git mirrors\n        shell: bash\n        run: bash .github/scripts/git_mirror_cache.sh\n'
+
+          def add_mirror_refresh(text):
+              text, n = re.subn(r'(?m)^      - name: Checkout Repository\n(?:        .*\n)+', lambda m: m.group(0) + MIRROR_STEP, text, count=1)
+              if n != 1:
+                  raise ValueError('Expected one Checkout Repository step in the self-hosted build job')
+              return text
+
 
           def to_self_hosted(text):
               text, n = re.subn(r'^([ \t]*runs-on:[ \t]*)ubuntu-latest[ \t]*$', r'\1self-hosted', text, flags=re.M)
@@ -379,6 +402,7 @@ jobs:
               build_text, replacements = re.subn(r'(?m)^(\s*uses:\s*)' + re.escape(action_ref) + r'\s*$', r'\1./.github/actions/build-kernel-selfhosted', build_text)
               if replacements != 1:
                   raise ValueError('Expected exactly one build-kernel action call')
+              build_text = add_mirror_refresh(build_text)
               action_text = selfhosted_action(action_src.read_text())
               action_sh.parent.mkdir(parents=True, exist_ok=True)
               publish(action_sh, None, action_text)
