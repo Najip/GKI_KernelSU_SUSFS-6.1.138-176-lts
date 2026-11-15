@@ -91,7 +91,7 @@ on:
       use_nomount:
         description: "NoMount"
         type: boolean
-        default: true
+        default: false
       use_bbg:
         description: "Baseband Guard"
         type: boolean
