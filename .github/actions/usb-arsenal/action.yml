@@ -13,6 +13,11 @@ inputs:
     required: false
     default: ''
 
+outputs:
+  commit:
+    description: 'Resolved USB-Arsenal commit (the clone is discarded after use)'
+    value: ${{ steps.source.outputs.commit }}
+
 runs:
   using: composite
   steps:
@@ -26,6 +31,17 @@ runs:
         # A clone that dies mid-transfer leaves the directory behind and every
         # later attempt then fails with "destination path already exists".
         cleanup: rm -rf USB-Arsenal
+
+    - name: Record the USB-Arsenal commit
+      # The checkout is thrown away after the patches are copied, so the resolved
+      # SHA has to be captured here or the release notes cannot name the source.
+      id: source
+      shell: bash
+      run: |
+        set -euo pipefail
+        C=$(git -C "${{ github.workspace }}/USB-Arsenal" rev-parse HEAD)
+        echo "commit=$C" >> "$GITHUB_OUTPUT"
+        echo "USB-Arsenal: source commit $C"
 
     - name: Apply USB-Arsenal kernel patches
       shell: bash

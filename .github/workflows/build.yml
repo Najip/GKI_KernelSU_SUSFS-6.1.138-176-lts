@@ -291,10 +291,18 @@ jobs:
         # folder that makes a second gadget instance and CD-ROM/DVD emulation work.
         # 6.1 has no patch set of its own upstream, so it takes the 5.15 one.
         if: contains(inputs.feature_set, 'USBA') || inputs.feature_set == 'All'
+        id: usba
         uses: ./.github/actions/usb-arsenal
         with:
           version: ${{ inputs.version }}
           kernel_version: ${{ inputs.kernel_version }}
+
+      - name: Record the USB Arsenal source commit
+        # Feeds the notes and the build metadata; without it a kernel with USB
+        # Arsenal is indistinguishable from one without.
+        if: contains(inputs.feature_set, 'USBA') || inputs.feature_set == 'All'
+        shell: bash
+        run: echo "USBA_COMMIT=${{ steps.usba.outputs.commit }}" >> "$GITHUB_ENV"
 
       # ON BY DEFAULT, and it is NOT free - measured, not assumed. Enabling it
       # changes struct cfs_rq (cfs_bandwidth, throttled lists, throttled_count),

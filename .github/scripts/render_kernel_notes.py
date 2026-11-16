@@ -15,6 +15,7 @@ if env("USE_NTSYNC","true")=="true": feats.append("NTSync")
 if env("USE_PTRACE","true")=="true": feats.append("Ptrace Leak Fix")
 if env("USE_UNICODE","true")=="true": feats.append("Unicode Fix")
 if env("USE_BPF","true")=="true": feats.append("BTF / eBPF / FUSE-BPF - **disabled**, open an issue if you require it")
+if env("USE_USBA","true")=="true": feats.append("USB Arsenal")
 if env("USE_PERF","false")=="true": feats.append("Performance Tuning")
 if env("PAGE_SIZE","4k")=="16k": feats.append("16 KB page size (ARM64)")
 lines=[]
@@ -34,6 +35,7 @@ nm=env("NOMOUNT_COMMIT","")
 kp=env("KERNEL_PATCHES_COMMIT","")
 ak=env("ANYKERNEL3_COMMIT","")
 ds=env("DROIDSPACES_COMMIT","")
+usba=env("USBA_COMMIT","")
 _rmatrix={}
 try: _rmatrix={m.get("root_flavor",""):m.get("root_commit","") for m in json.loads(env("ROOT_MATRIX","[]")) if isinstance(m,dict)}
 except: pass
@@ -57,7 +59,7 @@ lines.append("")
 lines.append("## Features")
 lines.append("")
 _kp_url="https://github.com/WildKernels/kernel_patches/commit/"
-_feat_commit={"NoMount":("https://github.com/maxsteeel/nomount/commit/",nm),"Baseband Guard":(_kp_url,kp),"DroidSpaces-OSS":("https://github.com/ravindu644/Droidspaces-OSS/commit/",ds)}
+_feat_commit={"NoMount":("https://github.com/maxsteeel/nomount/commit/",nm),"Baseband Guard":(_kp_url,kp),"DroidSpaces-OSS":("https://github.com/ravindu644/Droidspaces-OSS/commit/",ds),"USB Arsenal":("https://github.com/ravindu644/USB-Arsenal/commit/",usba)}
 for f in feats:
     _u,_c=_feat_commit.get(f,("",""))
     if _c and len(_c)==40: lines.append(f"- {f} [`{_c[:7]}`]({_u}{_c})")

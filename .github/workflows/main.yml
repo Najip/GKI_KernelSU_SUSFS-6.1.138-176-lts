@@ -135,6 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       nomount_commit: ${{ steps.resolve.outputs.nomount_commit }}
+      usba_commit: ${{ steps.resolve.outputs.usba_commit }}
       kernelsu_commit: ${{ steps.resolve.outputs.kernelsu_commit }}
       next_base_commit: ${{ steps.resolve.outputs.next_base_commit }}
       kernelsu_branch: ${{ steps.resolve.outputs.kernelsu_branch }}
@@ -329,6 +330,11 @@ jobs:
           # NoMount (pinned in verified mode, else dev tip)
           # NoMount always tracks the dev tip - never pinned, in either mode.
           emit nomount_commit "$(resolve_sha https://github.com/maxsteeel/nomount.git refs/heads/dev)"
+
+          # USB-Arsenal has no pin: the build clones its default branch, so the
+          # tip resolved here is what the notes report. Only used for the notes,
+          # never fed back into the build.
+          emit usba_commit "$(resolve_sha https://github.com/ravindu644/USB-Arsenal.git refs/heads/main)"
 
           # KernelSU-Next manager - always built from the official repo's dev branch.
           # pershoot's fork is used only for the kernel SUSFS integration (root_commit below),
@@ -1860,6 +1866,8 @@ jobs:
           # list it so users know it is off and where to ask.
           USE_BPF: 'true'
           USE_PERF: ${{ inputs.use_perf || false }}
+          USE_USBA: ${{ contains(needs.resolve-sources.outputs.feature_set, 'USBA') }}
+          USBA_COMMIT: ${{ needs.resolve-sources.outputs.usba_commit }}
           PAGE_SIZE: ${{ inputs.page_size || '4k' }}
           KERNEL_BUILD_VERSION: ${{ inputs.kernel_build_version || 'All' }}
           NOMOUNT_COMMIT: ${{ needs.resolve-sources.outputs.nomount_commit }}
