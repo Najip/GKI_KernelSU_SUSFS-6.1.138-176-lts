@@ -1,0 +1,44 @@
+name: Build Kernel (Self-Hosted)
+description: Builds kernel using legacy build.sh or Bazel (kleaf)
+inputs:
+  version:
+    description: Kernel config version (e.g., android14-6.1)
+    required: true
+  page_size:
+    description: 'ARM64 page size: 4k (default, unchanged behaviour) or 16k'
+    required: false
+    type: string
+    default: 4k
+  allow_version_mismatch:
+    description: Whether to force-load version-mismatched modules
+    required: false
+    type: boolean
+    default: false
+runs:
+  using: composite
+  steps:
+  - name: Initialize runner-owned build paths
+    shell: bash
+    run: "set -euo pipefail\n[[ \"${RUNNER_ENVIRONMENT:-}\" == self-hosted ]] || { echo 'Expected self-hosted runner' >&2; exit 1; }\nout=$(mktemp -d \"${RUNNER_TEMP:?}/gki-out.XXXXXX\")\ncache=\"${XDG_CACHE_HOME:-$HOME/.cache}/gki-kernel/bazel\"\nmkdir -p \"$cache\"\nfor dir in \"$out\" \"$cache\"; do\n  probe=$(mktemp \"$dir/.write-test.XXXXXX\")\n  rm -f \"$probe\"\ndone\nprintf 'GKI_OUT_DIR=%s\\nGKI_BAZEL_CACHE=%s\\n' \"$out\" \"$cache\" >> \"$GITHUB_ENV\"\nprintf 'Build output: %s\\nBazel cache: %s\\n' \"$out\" \"$cache\"\n"
+  - name: Build Kernel (build.sh)
+    if: startsWith(inputs.version, 'android12') || startsWith(inputs.version, 'android13')
+    shell: bash
+    working-directory: ${{ github.workspace }}/kernel
+    run: "set -euo pipefail\nif [ \"${{ inputs.page_size }}\" != \"4k\" ]; then\n  echo \"ERROR: page_size=${{ inputs.page_size }} is only supported by the Kleaf (Bazel) build; this tree uses build/build.sh.\" >&2\n  exit 1\nfi\n# A build-config fragment, not a Kconfig one: build.sh sources it, and the\n# POST_DEFCONFIG_CMDS it sets is what merges our config into .config.\ncp \"${{ github.workspace }}/.github/actions/build-kernel/legacy-fragment.config\" legacy-fragment.config\nexport BUILD_CONFIG_FRAGMENTS=\"legacy-fragment.config\"\nBUILD_GKI_ARTIFACTS=\"\" \\\nBUILD_GKI_CERTIFICATION_TOOLS=0 \\\nBUILD_SYSTEM_DLKM=0 \\\nSKIP_VENDOR_BOOT=1 \\\nSKIP_EXT_MODULES=1 \\\nSKIP_CP_KERNEL_HDR=1 \\\nOUT_DIR=\"${GKI_OUT_DIR}\" \\\nLTO=thin \\\nBUILD_CONFIG=common/build.config.gki.aarch64 \\\nbuild/build.sh -j\"$(nproc)\"\n"
+  - name: Build Kernel (Kleaf)
+    if: ${{ !startsWith(inputs.version, 'android12') && !startsWith(inputs.version, 'android13') }}
+    shell: bash
+    working-directory: ${{ github.workspace }}/kernel
+    run: "set -euo pipefail\n# Kleaf evaluates build.config.gki.aarch64 in its own environment, so the\n# SOURCE_DATE_EPOCH / KBUILD_BUILD_TIMESTAMP we export job-wide do not\n# reach the kernel and the build stamp comes out as Unix 0. Exporting\n# them from the build config does. From sarreos, PR #354, commit ce8873e7\n# (\"Fix kernel build timestamp\"); the existence check is ours so a tree\n# without that config warns instead of failing.\nBUILD_CONFIG_FILE=\"common/build.config.gki.aarch64\"\nif [ -f \"$BUILD_CONFIG_FILE\" ]; then\n  if ! grep -q 'Reproducible timestamp injected by the CI workflow' \"$BUILD_CONFIG_FILE\"; then\n    printf '\\n# Reproducible timestamp injected by the CI workflow.\\nexport SOURCE_DATE_EPOCH=%q\\nexport KBUILD_BUILD_TIMESTAMP=%q\\n' \\\n      \"${SOURCE_DATE_EPOCH:-0}\" \"${KBUILD_BUILD_TIMESTAMP:-@0}\" >> \"$BUILD_CONFIG_FILE\"\n    echo \"[*] build.config.gki.aarch64: exported SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-0}\"\n  fi\nelse\n  echo \"::warning\
+      \ title=build timestamp::$BUILD_CONFIG_FILE not present - Kleaf will stamp the build itself\"\nfi\nPAGE_SIZE_FLAGS=()\nif [ \"${{ inputs.page_size }}\" = \"16k\" ]; then\n  PAGE_SIZE_FLAGS+=(--page_size=16k)\nfi\ntools/bazel build \\\n  --config=fast \\\n  \"${PAGE_SIZE_FLAGS[@]}\" \\\n  --defconfig_fragment=//common:wild_defconfig.fragment \\\n  //common:kernel_aarch64\n"
+  - name: Verify Page Size in Generated .config
+    shell: bash
+    working-directory: ${{ github.workspace }}/kernel
+    run: "set -euo pipefail\nPAGE_SIZE=\"${{ inputs.page_size }}\"\n\n# Kleaf writes the resolved .config under the kernel_config rule output\n# dir; the legacy build.sh writes it into OUT_DIR. Locate it instead of\n# hardcoding a path that upstream may rename.\nCONFIG_FILE=\"\"\nfor candidate in \\\n  bazel-bin/common/kernel_aarch64_config/out_dir/.config \\\n  ${GKI_OUT_DIR}/.config; do\n  if [ -f \"$candidate\" ]; then CONFIG_FILE=\"$candidate\"; break; fi\ndone\nif [ -z \"$CONFIG_FILE\" ]; then\n  CONFIG_FILE=\"$(find bazel-bin/common \"${GKI_OUT_DIR}\" -maxdepth 4 -name .config -type f 2>/dev/null | head -n1 || true)\"\nfi\nif [ -z \"$CONFIG_FILE\" ]; then\n  if [ \"$PAGE_SIZE\" != \"16k\" ]; then\n    # 4k builds are unchanged from before this feature; a missing .config\n    # is a gap in the check, not a reason to fail a working build.\n    echo \"WARNING: no .config found; skipping page-size verification for 4k.\"\n    exit 0\n  fi\n  echo \"ERROR: could not locate the generated\
+      \ .config; page size cannot be verified.\" >&2\n  exit 1\nfi\necho \"Verifying page size using $CONFIG_FILE\"\ngrep -E '^(# )?CONFIG_ARM64_(4K|16K|64K)_PAGES|^CONFIG_ARM64_PAGE_SHIFT' \"$CONFIG_FILE\" || true\n\n# Susfs-presence probe on the built image: the fs/susfs.o objects leave\n# their log-format strings in .rodata; a zero count means susfs was\n# trimmed somewhere between config and link.\nfor img in bazel-bin/common/kernel_aarch64/Image \"${GKI_OUT_DIR}/dist/Image\"; do\n  if [ -f \"$img\" ]; then\n    echo \"susfs strings in $(basename \"$img\"): $(grep -ac susfs \"$img\" || true)\"\n    break\n  fi\ndone\n\n# Root/susfs config probe: the Kleaf config stage has been observed to\n# drop KSU configs in flavour builds; surface the block and fail loud\n# when the root implementation's configs went missing.\necho \"--- KSU config block from $CONFIG_FILE ---\"\ngrep -E '^#? ?CONFIG_KSU' \"$CONFIG_FILE\" || echo '(no CONFIG_KSU entries in final .config)'\nif [ \"${ROOT_IMPLEMENTATION:-}\"\
+      \ != '' ] && [ \"${ROOT_IMPLEMENTATION:-}\" != 'none' ]; then\n  if ! grep -q '^CONFIG_KSU=y' \"$CONFIG_FILE\"; then\n    echo \"ERROR: CONFIG_KSU missing from final .config (root: $ROOT_IMPLEMENTATION)\" >&2\n    exit 1\n  fi\n  if [ -n \"${SUSFS_COMMIT:-}\" ] && ! grep -q '^CONFIG_KSU_SUSFS=y' \"$CONFIG_FILE\"; then\n    echo \"ERROR: CONFIG_KSU_SUSFS missing from final .config (root: $ROOT_IMPLEMENTATION, susfs ${SUSFS_COMMIT})\" >&2\n    exit 1\n  fi\nfi\n\nif [ \"$PAGE_SIZE\" = \"16k\" ]; then\n  want_on=\"CONFIG_ARM64_16K_PAGES=y\"\n  want_off=\"# CONFIG_ARM64_4K_PAGES is not set\"\nelse\n  want_on=\"CONFIG_ARM64_4K_PAGES=y\"\n  want_off=\"# CONFIG_ARM64_16K_PAGES is not set\"\nfi\n\nif ! grep -qx \"$want_on\" \"$CONFIG_FILE\"; then\n  echo \"ERROR: expected '$want_on' in $CONFIG_FILE\" >&2\n  grep -E '^(# )?CONFIG_ARM64_(4K|16K|64K)_PAGES' \"$CONFIG_FILE\" >&2 || true\n  exit 1\nfi\nif ! grep -qx \"$want_off\" \"$CONFIG_FILE\"; then\n  echo \"ERROR: expected '$want_off' in $CONFIG_FILE\"\
+      \ >&2\n  grep -E '^(# )?CONFIG_ARM64_(4K|16K|64K)_PAGES' \"$CONFIG_FILE\" >&2 || true\n  exit 1\nfi\necho \"Page size verified: ${PAGE_SIZE}\"\n"
+  - name: Gather Build Artifacts
+    shell: bash
+    working-directory: ${{ github.workspace }}/kernel
+    run: "set -euo pipefail\nif [ -f \"bazel-bin/common/kernel_aarch64/Image\" ]; then\n  echo \"Found Image at bazel-bin/common/kernel_aarch64/Image\"\n  cp \"bazel-bin/common/kernel_aarch64/Image\" \"${{ github.workspace }}/AnyKernel3/Image\"\n  exit 0\nfi\nif [ -f \"${GKI_OUT_DIR}/dist/Image\" ]; then\n  echo \"Found Image at ${GKI_OUT_DIR}/dist/Image\"\n  cp \"${GKI_OUT_DIR}/dist/Image\" \"${{ github.workspace }}/AnyKernel3/Image\"\n  exit 0\nfi\n\nexit 1\n"
