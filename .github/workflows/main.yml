@@ -1367,10 +1367,6 @@ jobs:
               echo "No rejects found to upload."
           fi
 
-      - name: Rejects Summary
-        run: |
-          echo "Reject artifacts were collected locally only and are not uploaded." >> "$GITHUB_STEP_SUMMARY"
-
       - name: Upload AIO-REJ Artifact
         uses: actions/upload-artifact@v7
         with:
@@ -1949,7 +1945,6 @@ jobs:
             echo "- **Nightly artifacts:** https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo "- **Note:** kernels that built successfully this run are attached below; failed families are simply absent. The link above lists everything this run produced."
           } >> nightly/release_body.md
-          cat nightly/release_body.md >> "$GITHUB_STEP_SUMMARY"
 
       # Publish-everything-that-built: download each family's AnyKernel3
       # artifacts and attach them to the nightly release. A family whose
@@ -2051,10 +2046,10 @@ jobs:
           shopt -s nullglob
           files=(release-assets/*.zip)
           if [ "${#files[@]}" -eq 0 ]; then
-            echo "No kernel artifacts this run; nightly published with notes only." >> "$GITHUB_STEP_SUMMARY"
+            echo "No kernel artifacts this run; nightly published with notes only."
             exit 0
           fi
-          echo "Uploading ${#files[@]} kernel assets..." >> "$GITHUB_STEP_SUMMARY"
+          echo "Uploading ${#files[@]} kernel assets..."
           failed=0
           for f in "${files[@]}"; do
             ok=false
@@ -2071,11 +2066,7 @@ jobs:
               failed=$((failed + 1))
             fi
           done
-          {
-            echo ""
-            echo "### Nightly assets"
-            echo "- uploaded: $(( ${#files[@]} - failed )) / ${#files[@]}"
-            if [ "$failed" -ne 0 ]; then
-              echo "- failed uploads: $failed (see job log)"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Nightly assets: uploaded $(( ${#files[@]} - failed )) / ${#files[@]}"
+          if [ "$failed" -ne 0 ]; then
+            echo "Nightly assets: failed uploads: $failed"
+          fi
