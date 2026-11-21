@@ -35,12 +35,7 @@ runs:
         rc=$?
         set -e
         printf '%s\n' "$OUT"
-        {
-          echo ""
-          echo "### Fragment vs .config"
-          echo ""
-          echo '```'
-          printf '%s\n' "$OUT"
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+        # No step summary: the same list is already printed above and lands in
+        # the job log. GitHub renders GITHUB_STEP_SUMMARY per step and a
+        # workflow-level env override does not win, so the write has to go.
         exit $rc
