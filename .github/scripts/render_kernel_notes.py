@@ -246,5 +246,3 @@ else:
 lines.append("")
 output="\n".join(lines)+"\n"
 print(output,end="")
-s=os.environ.get("GITHUB_STEP_SUMMARY")
-if s: open(s,"a").write(output)

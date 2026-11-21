@@ -35,7 +35,17 @@ runs:
         rc=$?
         set -e
         printf '%s\n' "$OUT"
-        # No step summary: the same list is already printed above and lands in
-        # the job log. GitHub renders GITHUB_STEP_SUMMARY per step and a
-        # workflow-level env override does not win, so the write has to go.
+        # Report to the BuildInfo artifact, not to the GitHub step summary.
+        # GITHUB_STEP_SUMMARY is rendered per step and is not where build
+        # evidence belongs - the zip travels with the kernel.
+        REPORT_DIR="${{ github.workspace }}/build-reports"
+        mkdir -p "$REPORT_DIR"
+        {
+          echo "Fragment vs .config"
+          echo "fragment: $FRAGMENT"
+          echo "config:   $CONFIG_FILE"
+          echo ""
+          printf '%s\n' "$OUT"
+        } > "$REPORT_DIR/fragment-check.txt"
+        echo "fragment report: $REPORT_DIR/fragment-check.txt"
         exit $rc
